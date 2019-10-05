@@ -1,0 +1,12 @@
+[submodule "conjct"]
+	path = conjct
+	url = https://github.com/as-capabl/conjct.git
+[submodule "holz"]
+	path = ext/holz
+	url = https://github.com/fumieval/holz.git
+[submodule "glTF"]
+	path = ext/glTF
+	url = https://github.com/KhronosGroup/glTF.git
+[submodule "ext/conjct"]
+	path = ext/conjct
+	url = https://github.com/as-capabl/conjct.git
