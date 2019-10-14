@@ -20,7 +20,7 @@ library
                   , Data.GlTF.GlTF
                   , Data.GlTF.Read
   -- other-extensions:
-  build-depends:    base ^>=4.11.1.0
+  build-depends:    base >=4.11 && <5
                   , template-haskell -any
                   , aeson
                   , mtl
