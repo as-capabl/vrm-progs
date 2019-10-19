@@ -4,6 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Main where
 
@@ -57,9 +58,6 @@ main =
     scene <- maybe (die "Scene index out of range\n") return $
         glTFScenes gltf !? scIx
 
-    tex <- overPtr (glGenTextures 1)
-    glBindTexture GL_TEXTURE_2D tex
-    with (pure 255 :: V3 Word8) $ glTexImage2D GL_TEXTURE_2D 0 GL_SRGB8 1 1 0 GL_RGBA GL_UNSIGNED_BYTE . castPtr
     {-
     let accs = glTFAccessors gltf
     forM_ accs $ \acc ->
@@ -79,8 +77,12 @@ main =
     withHolz $
       do
         w <- openWindow Windowed (Box (V2 0 0) (V2 640 960))
-
-        shader <- makeShader -- makeVRMShader
+        
+        tex <- overPtr (glGenTextures 1)
+        glBindTexture GL_TEXTURE_2D tex
+        with (pure 255 :: V3 Word8) $ glTexImage2D GL_TEXTURE_2D 0 GL_SRGB8 1 1 0 GL_RGBA GL_UNSIGNED_BYTE . castPtr
+    
+        shader <- makeVRMShader
         -- let prog = shaderProg shader
         -- ambient <- getUniform prog "ambient"
         -- planeLight <- getUniform prog "planeLight"
@@ -99,7 +101,7 @@ main =
             initView
             liftIO $ with (fromDiag44 300 300 300 1 :: M44 Float) $ \p ->
                 glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
-            clearColor whiteColor
+            clearColor grayColor
             glBindTexture GL_TEXTURE_2D tex
             drawScene gltf vbs scene
             -- forM_ vbs $ \(tx, env, vb) ->
@@ -134,7 +136,7 @@ rotZX th = mkTransformationMat rotM trV
     trV = V3 0 0 0
 
 
-whiteColor = V4 1.0 1.0 1.0 1.0
+grayColor = V4 0.7 0.7 0.7 1.0
 
 blueColor = V4 0 0 1.0 (0.5)
 
@@ -149,7 +151,7 @@ dispEType 5125 = "UNSIGNED_INT"
 dispEType 5126 = "FLOAT"
 dispEType i = "Unknown"
 
-mapToGL :: MonadIO m => GlTF -> BinChunk -> Scene -> m MeshMap
+mapToGL :: forall m. MonadIO m => GlTF -> BinChunk -> Scene -> ShaderT m MeshMap
 mapToGL gltf bin scene =
   do
     refMM <- newIORef IM.empty
@@ -172,17 +174,25 @@ mapToGL gltf bin scene =
         let prims = meshPrimitives msh
         mvbs <- mapM loadPrim (V.toList prims)
         modifyIORef' refMM $ IM.insert mshId (BV.fromListN (V.length prims) $ catMaybes mvbs)
-        hFlush stdout
-            
 
+    loadPrim :: MeshPrimitive -> ShaderT m (Maybe MappedPrim)
     loadPrim p = runMaybeT $
       do
+        let material = meshPrimitiveMaterial p >>= (glTFMaterials gltf !?)
+            materialPbl = material >>= materialPbrMetallicRoughness
+            baseColorFactor = fromMaybe (V4 1.0 1.0 1.0 1.0) $
+              do
+                m <- materialPbl
+                listToV4 $ materialPbrMetallicRoughnessBaseColorFactor m
+        BS.putStr $ encodeUtf8 $ T.pack (show material)
+        BS.putStr "\n\n"
         let attrs = meshPrimitiveAttributes p
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- uv <- MaybeT $ return $ HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
         let midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
+        locDiffuse <- lift $ locationDiffuse <$> ShaderT ask
         liftIO $
           do
             vao <- overPtr $ glGenVertexArrays 1
@@ -198,10 +208,6 @@ mapToGL gltf bin scene =
             glEnableVertexAttribArray 0
             withAcc gltf pos bin $ \v ->
               do
-                forM [0..4] $ \i ->
-                  do
-                    n <- peekElemOff (castPtr v) i :: IO (V3 Float)
-                    BS.putStr $ encodeUtf8 $ T.pack (show n)
                 glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount pos)) v GL_STATIC_DRAW
 
             glBindBuffer GL_ARRAY_BUFFER $ vbo V.! 1
@@ -238,11 +244,16 @@ mapToGL gltf bin scene =
                 
                     return $
                       do
+                        setUniform4FV locDiffuse baseColorFactor
                         glBindVertexArray vao
                         glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
             return MappedPrim{..}
                     
-
+listToV4 :: Vector J.Value -> Maybe (V4 Float)
+listToV4 v = V4 <$> toF (v !? 0) <*> toF (v !? 1) <*> toF (v !? 2) <*> toF (v !? 3)
+  where
+    toF (Just (J.fromJSON -> J.Success n)) = Just n
+    toF _ = Nothing
 
             
 withAcc :: forall b m. (MonadIO m, MonadUnliftIO m) => GlTF -> Accessor -> BinChunk -> (Ptr () -> m b) -> m b
@@ -308,7 +319,7 @@ makeVRMShader = do
 
     locationModel <- getUniform shaderProg "model"
     locationProjection <- getUniform shaderProg "projection"
-    locationDiffuse <- getUniform shaderProg "diffuse"
+    locationDiffuse <- getUniform shaderProg "baseColorFactor"
     locationSpecular <- getUniform shaderProg "specular"
 
     with (V4 1 1 1 1 :: V4 Float) $ \ptr -> do
@@ -333,7 +344,7 @@ vertexShaderSource = "#version 330\n\
     \  gl_Position = projection * viewPos; \
     \  texUV = vec2(0.0, 0.0); \
     \  normal = in_Normal;\
-    \  color = vec4(0.0, 0.0, 0.5, 0.5);\
+    \  color = vec4(1.0, 1.0, 1.0, 1.0);\
     \}"
 
 fragmentShaderSource :: String
@@ -344,8 +355,8 @@ fragmentShaderSource = "#version 330\n\
     \in vec4 viewPos; \
     \in vec4 color; \
     \uniform sampler2D tex; \
-    \uniform vec4 diffuse; \
+    \uniform vec4 baseColorFactor; \
     \uniform vec3 specular; \
     \void main(void){ \
-    \  fragColor = color * diffuse; \
+    \  fragColor = color * baseColorFactor; \
     \}"
