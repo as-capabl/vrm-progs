@@ -14,15 +14,16 @@ import qualified RIO.Vector as BV
 import qualified Data.Vector.Storable as SV
 import qualified RIO.Text as T
 import qualified RIO.ByteString as BS
+import qualified Data.ByteString.Unsafe as BS
 import qualified Data.Vector.Generic as V
 import qualified Data.Vector.Storable.Mutable as SMV
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Cont
 import System.Environment (getArgs)
 import Data.GlTF
-import Graphics.Holz hiding (Vertex, vertexShaderSource, fragmentShaderSource)
+import Graphics.Holz hiding (Vertex, vertexShaderSource, fragmentShaderSource, registerTextures)
 import Graphics.GL
-import Linear
+import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Aeson as J
 import qualified Data.IntMap.Strict (IntMap)
@@ -33,6 +34,7 @@ import Foreign.Marshal.Array (allocaArray)
 import Foreign.Marshal.Utils (with)
 import Foreign.C.String
 import Foreign.Storable
+import qualified Codec.Picture as Jp
 
 die :: MonadIO m => Text -> m a
 die s = BS.putStr (encodeUtf8 s) >> exitFailure
@@ -80,10 +82,6 @@ main =
       do
         w <- openWindow Windowed (Box (V2 0 0) (V2 640 960))
         
-        tex <- overPtr (glGenTextures 1)
-        glBindTexture GL_TEXTURE_2D tex
-        with (pure 255 :: V3 Word8) $ glTexImage2D GL_TEXTURE_2D 0 GL_SRGB8 1 1 0 GL_RGBA GL_UNSIGNED_BYTE . castPtr
-    
         shader <- makeVRMShader
         -- let prog = shaderProg shader
         -- ambient <- getUniform prog "ambient"
@@ -104,7 +102,6 @@ main =
             liftIO $ with (fromDiag44 300 300 300 1 :: M44 Float) $ \p ->
                 glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
             clearColor grayColor
-            glBindTexture GL_TEXTURE_2D tex
             drawScene gltf vbs scene
             -- forM_ vbs $ \(tx, env, vb) ->
 
@@ -192,16 +189,24 @@ mapToGL gltf bin scene =
               do
                 m <- materialPbr
                 txInfo <- materialPbrMetallicRoughnessBaseColorTexture m
-                
+                glTFTextures gltf !? textureInfoIndex txInfo
+            baseColorTxImg =
+              do
+                tx <- baseColorTx
+                textureSource tx 
+            
         BS.putStr $ encodeUtf8 $ T.pack (show material)
         BS.putStr "\n\n"
+        BS.putStr $ encodeUtf8 $ T.pack (show baseColorTx)
+        BS.putStr "\n\n"
         let attrs = meshPrimitiveAttributes p
+            uv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
+            midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
-        -- uv <- MaybeT $ return $ HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
-        let midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
         locDiffuse <- lift $ locationDiffuse <$> ShaderT ask
+        registeredTx <- maybe (return Nothing) (loadAndRegisterTexture refTM) baseColorTxImg
         liftIO $
           do
             vao <- overPtr $ glGenVertexArrays 1
@@ -253,10 +258,52 @@ mapToGL gltf bin scene =
                 
                     return $
                       do
-                        setUniform4FV locDiffuse baseColorFactor
                         glBindVertexArray vao
+                        setUniform4FV locDiffuse baseColorFactor
+                        glBindTexture GL_TEXTURE_2D $ fromMaybe 0 registeredTx
                         glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
             return MappedPrim{..}
+
+    loadAndRegisterTexture :: MonadIO m2 => IORef TxMap -> GlTFid -> m2 (Maybe GLuint)
+    loadAndRegisterTexture refTM imgIdx =
+      do
+        tm <- readIORef refTM
+        case IM.lookup imgIdx tm
+          of
+            Just t -> return (Just t)
+            Nothing ->
+              do
+                let img = glTFImages gltf !? imgIdx
+                    bviewIdx = img >>= imageBufferView
+                case bviewIdx >>= (glTFBufferViews gltf !?)
+                  of
+                    Nothing ->
+                      do
+                        BS.putStr "Warning: no imageBufferView"
+                        return Nothing
+                    Just bview ->
+                      do
+                        let ofs = fromMaybe 0 $ bufferViewByteOffset bview
+                            len = bufferViewByteLength bview
+                        eth <- liftIO $ withForeignPtr bin $ \p ->
+                          do
+                            b <- BS.unsafePackCStringLen (p `plusPtr` ofs, len)
+                            return $! Jp.decodeImage b
+                        case eth
+                          of
+                            Left s -> trace (T.pack s) $ return Nothing
+                            Right di ->
+                              do
+                                let rgba8@(Jp.Image w h _) = Jp.convertRGBA8 di
+                                idx <- registerTextures (V2 w h) [(V2 0 0, rgba8)]
+                                return (Just idx)
+                        
+
+
+                    
+        
+        
+        
                     
 listToV4 :: Vector J.Value -> Maybe (V4 Float)
 listToV4 v = V4 <$> toF (v !? 0) <*> toF (v !? 1) <*> toF (v !? 2) <*> toF (v !? 3)
@@ -369,3 +416,31 @@ fragmentShaderSource = "#version 330\n\
     \void main(void){ \
     \  fragColor = color * baseColorFactor; \
     \}"
+
+registerTextures :: MonadIO m => V2 Int -> [(V2 Int, Jp.Image Jp.PixelRGBA8)] -> m GLuint
+registerTextures (V2 sw sh) imgs = liftIO $ do
+    tex <- overPtr (glGenTextures 1)
+    glBindTexture GL_TEXTURE_2D tex
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR_MIPMAP_LINEAR
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_LINEAR
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_CLAMP_TO_EDGE
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_CLAMP_TO_EDGE
+    glPixelStorei GL_UNPACK_ALIGNMENT 4
+    glPixelStorei GL_UNPACK_IMAGE_HEIGHT 0
+    glPixelStorei GL_UNPACK_LSB_FIRST 0
+    glPixelStorei GL_UNPACK_ROW_LENGTH 0
+    glPixelStorei GL_UNPACK_SKIP_IMAGES 0
+    glPixelStorei GL_UNPACK_SKIP_PIXELS 0
+    glPixelStorei GL_UNPACK_SKIP_ROWS 0
+    glPixelStorei GL_UNPACK_SWAP_BYTES 0
+    let level = floor $ logBase (2 :: Float) $ fromIntegral (max sw sh)
+
+    glTexStorage2D GL_TEXTURE_2D level GL_SRGB8_ALPHA8 (fromIntegral sw) (fromIntegral sh)
+
+    forM_ imgs $ \(V2 x y, Jp.Image w h vec) -> SV.unsafeWith vec
+        $ glTexSubImage2D GL_TEXTURE_2D 0 (fromIntegral x) (fromIntegral y) (fromIntegral w) (fromIntegral h) GL_RGBA GL_UNSIGNED_BYTE
+        . castPtr
+
+    glGenerateMipmap GL_TEXTURE_2D
+
+    return tex
