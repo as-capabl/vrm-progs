@@ -44,6 +44,8 @@ data MappedPrim = MappedPrim {
 
 type MeshMap = IntMap (Vector MappedPrim)
 
+type TxMap = IntMap GLuint
+
 main :: IO ()
 main =
   do
@@ -88,7 +90,7 @@ main =
         -- planeLight <- getUniform prog "planeLight"
         -- planeDir <- getUniform prog "planeDir"
 
-        vbs <- runShaderT shader $ mapToGL gltf bin scene
+        (vbs, txs) <- runShaderT shader $ mapToGL gltf bin scene
         vTr <- newIORef initTrans
 
         forever $ runReaderT `flip` w $ withFrame w $ runShaderT shader $
@@ -151,14 +153,15 @@ dispEType 5125 = "UNSIGNED_INT"
 dispEType 5126 = "FLOAT"
 dispEType i = "Unknown"
 
-mapToGL :: forall m. MonadIO m => GlTF -> BinChunk -> Scene -> ShaderT m MeshMap
+mapToGL :: forall m. MonadIO m => GlTF -> BinChunk -> Scene -> ShaderT m (MeshMap, TxMap)
 mapToGL gltf bin scene =
   do
     refMM <- newIORef IM.empty
-    mapM_ (loadNode refMM) $ sceneNodes scene
-    readIORef refMM
+    refTM <- newIORef IM.empty
+    mapM_ (loadNode refMM refTM) $ sceneNodes scene
+    (,) <$> readIORef refMM <*> readIORef refTM
   where
-    loadNode refMM nodeId =
+    loadNode refMM refTM nodeId =
       do
         nd <- maybe (die "Out of range in node.") return $
             glTFNodes gltf !? fromIntegral nodeId
@@ -166,24 +169,30 @@ mapToGL gltf bin scene =
           do
             mshId <- MaybeT $ return $ nodeMesh nd
             msh <- MaybeT $ return $ glTFMeshes gltf !? fromIntegral mshId
-            lift $ loadMesh refMM mshId msh
-        mapM_ (loadNode refMM) $ nodeChildren nd
+            lift $ loadMesh refMM refTM mshId msh
+        mapM_ (loadNode refMM refTM) $ nodeChildren nd
 
-    loadMesh refMM mshId msh =
+    loadMesh refMM refTM mshId msh =
       do
         let prims = meshPrimitives msh
-        mvbs <- mapM loadPrim (V.toList prims)
-        modifyIORef' refMM $ IM.insert mshId (BV.fromListN (V.length prims) $ catMaybes mvbs)
+        mvbs <- mapM (loadPrim refTM) (V.toList prims)
+        modifyIORef' refMM $
+            IM.insert mshId (BV.fromListN (V.length prims) $ catMaybes mvbs)
 
-    loadPrim :: MeshPrimitive -> ShaderT m (Maybe MappedPrim)
-    loadPrim p = runMaybeT $
+    loadPrim :: IORef TxMap -> MeshPrimitive -> ShaderT m (Maybe MappedPrim)
+    loadPrim refTM p = runMaybeT $
       do
         let material = meshPrimitiveMaterial p >>= (glTFMaterials gltf !?)
-            materialPbl = material >>= materialPbrMetallicRoughness
+            materialPbr = material >>= materialPbrMetallicRoughness
             baseColorFactor = fromMaybe (V4 1.0 1.0 1.0 1.0) $
               do
-                m <- materialPbl
+                m <- materialPbr
                 listToV4 $ materialPbrMetallicRoughnessBaseColorFactor m
+            baseColorTx =
+              do
+                m <- materialPbr
+                txInfo <- materialPbrMetallicRoughnessBaseColorTexture m
+                
         BS.putStr $ encodeUtf8 $ T.pack (show material)
         BS.putStr "\n\n"
         let attrs = meshPrimitiveAttributes p
