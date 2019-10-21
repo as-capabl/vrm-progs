@@ -95,11 +95,11 @@ main =
           do
             windowShouldClose >>= bool (return ()) exitSuccess
 
-            -- tr <- readIORef vTr
-            -- writeIORef vTr $! rotZX (pi * 0.01) !*! tr
+            tr <- readIORef vTr
+            writeIORef vTr $! rotZX (pi * 0.005) !*! tr
 
             initView
-            liftIO $ with (fromDiag44 300 300 300 1 :: M44 Float) $ \p ->
+            liftIO $ with tr $ \p ->
                 glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
             clearColor grayColor
             drawScene gltf vbs scene
@@ -113,7 +113,7 @@ initView = do
         h = y1 - y0
     setProjection $ ortho (-w/2) (w/2) (-h/2) (h/2) (-200) 200
 
-initTrans = mkTransformationMat (fromDiag33 20 20 20) (V3 0.0 0.0 0.0)
+initTrans = mkTransformationMat (fromDiag33 400 400 400) (V3 0.0 (-250.0) 0.0) :: M44 Float
 
 fromDiag33 :: Num a => a -> a -> a -> M33 a
 fromDiag33 x y z = V3 (V3 x 0 0) (V3 0 y 0) (V3 0 0 z)
