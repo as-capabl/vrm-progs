@@ -200,7 +200,7 @@ mapToGL gltf bin scene =
         BS.putStr $ encodeUtf8 $ T.pack (show baseColorTx)
         BS.putStr "\n\n"
         let attrs = meshPrimitiveAttributes p
-            uv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
+            mUv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
             midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
@@ -212,7 +212,7 @@ mapToGL gltf bin scene =
             vao <- overPtr $ glGenVertexArrays 1
             glBindVertexArray vao
             -- VBOs
-            let nBuf = 3
+            let nBuf = 4
             vboM <- SMV.unsafeNew nBuf
             SMV.unsafeWith vboM $ glGenBuffers (fromIntegral nBuf)
             vbo <- SV.unsafeFreeze vboM
@@ -224,9 +224,21 @@ mapToGL gltf bin scene =
               do
                 glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount pos)) v GL_STATIC_DRAW
 
-            glBindBuffer GL_ARRAY_BUFFER $ vbo V.! 1
-            glVertexAttribPointer 1 3 GL_FLOAT GL_FALSE 0 nullPtr
-            glEnableVertexAttribArray 1
+            case mUv
+              of
+                Just uv ->
+                  do
+                    glBindBuffer GL_ARRAY_BUFFER $ vbo V.! 1
+                    glVertexAttribPointer 1 2 GL_FLOAT GL_FALSE 0 nullPtr
+                    glEnableVertexAttribArray 1
+                    withAcc gltf uv bin $ \v ->
+                        glBufferData GL_ARRAY_BUFFER (2 * 4 * fromIntegral (accessorCount uv)) v GL_STATIC_DRAW
+                Nothing ->
+                    return ()
+    
+            glBindBuffer GL_ARRAY_BUFFER $ vbo V.! 2
+            glVertexAttribPointer 2 3 GL_FLOAT GL_FALSE 0 nullPtr
+            glEnableVertexAttribArray 2
             withAcc gltf norm bin $ \v ->
                 glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount norm)) v GL_STATIC_DRAW
 
@@ -252,7 +264,7 @@ mapToGL gltf bin scene =
                             J.Number 5125 -> (GL_UNSIGNED_INT, 4)
                             x -> error $ show x
                         idxCount = fromIntegral $ accessorCount idcs
-                    glBindBuffer GL_ELEMENT_ARRAY_BUFFER $ vbo V.! 2
+                    glBindBuffer GL_ELEMENT_ARRAY_BUFFER $ vbo V.! 3
                     withAcc gltf idcs bin $ \v ->
                         glBufferData GL_ELEMENT_ARRAY_BUFFER (idxCount * eleSiz) v GL_STATIC_DRAW
                 
@@ -361,7 +373,8 @@ makeVRMShader = do
     glAttachShader shaderProg fragmentShader
 
     withCString "in_Position" $ glBindAttribLocation shaderProg 0
-    withCString "in_Normal" $ glBindAttribLocation shaderProg 1
+    withCString "in_UV" $ glBindAttribLocation shaderProg 1
+    withCString "in_Normal" $ glBindAttribLocation shaderProg 2
 
     glLinkProgram shaderProg
     glUseProgram shaderProg
@@ -390,6 +403,7 @@ vertexShaderSource = "#version 330\n\
     \uniform mat4 projection; \
     \uniform mat4 model; \
     \in vec3 in_Position; \
+    \in vec2 in_UV; \
     \in vec3 in_Normal; \
     \out vec2 texUV; \
     \out vec3 normal; \
@@ -398,7 +412,7 @@ vertexShaderSource = "#version 330\n\
     \void main(void) { \
     \  viewPos = model * vec4(in_Position, 1.0); \
     \  gl_Position = projection * viewPos; \
-    \  texUV = vec2(0.0, 0.0); \
+    \  texUV = in_UV; \
     \  normal = in_Normal;\
     \  color = vec4(1.0, 1.0, 1.0, 1.0);\
     \}"
@@ -414,7 +428,7 @@ fragmentShaderSource = "#version 330\n\
     \uniform vec4 baseColorFactor; \
     \uniform vec3 specular; \
     \void main(void){ \
-    \  fragColor = color * baseColorFactor; \
+    \  fragColor = texture(tex, texUV) * color * baseColorFactor; \
     \}"
 
 registerTextures :: MonadIO m => V2 Int -> [(V2 Int, Jp.Image Jp.PixelRGBA8)] -> m GLuint
