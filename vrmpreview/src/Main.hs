@@ -19,6 +19,7 @@ import qualified Data.Vector.Generic as V
 import qualified Data.Vector.Storable.Mutable as SMV
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Cont
+import Control.Monad.Except
 import System.Environment (getArgs)
 import Data.GlTF
 import Graphics.Holz hiding (Vertex, vertexShaderSource, fragmentShaderSource, registerTextures)
@@ -200,10 +201,10 @@ mapToGL gltf bin scene =
                 textureSource tx 
             
         logInfo (displayShow material)
-        logInfo (displayShow baseColorTx)
         let attrs = meshPrimitiveAttributes p
             mUv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
             midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
+        logInfo (displayShow attrs)
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
@@ -279,48 +280,39 @@ mapToGL gltf bin scene =
             return MappedPrim{..}
 
     loadAndRegisterTexture :: IORef TxMap -> GlTFid -> ShaderT m (Maybe GLuint)
-    loadAndRegisterTexture refTM imgIdx =
+    loadAndRegisterTexture refTM imgIdx = warnOnException $
       do
         tm <- readIORef refTM
         case IM.lookup imgIdx tm
           of
-            Just t -> return (Just t)
+            Just t -> return t
             Nothing ->
               do
                 let img = glTFImages gltf !? imgIdx
                     bviewIdx = img >>= imageBufferView
-                case bviewIdx >>= (glTFBufferViews gltf !?)
+                bview <-
+                    maybe (throwError "No imageBufferView") return $
+                        bviewIdx >>= (glTFBufferViews gltf !?)
+                let ofs = fromMaybe 0 $ bufferViewByteOffset bview
+                    len = bufferViewByteLength bview
+                eth <- liftIO $ withForeignPtr bin $ \p ->
+                  do
+                    b <- BS.unsafePackCStringLen (p `plusPtr` ofs, len)
+                    return $! Jp.decodeImage b
+                di <- case eth
                   of
-                    Nothing ->
-                      do
-                        logWarn "No imageBufferView"
-                        return Nothing
-                    Just bview ->
-                      do
-                        let ofs = fromMaybe 0 $ bufferViewByteOffset bview
-                            len = bufferViewByteLength bview
-                        eth <- liftIO $ withForeignPtr bin $ \p ->
-                          do
-                            b <- BS.unsafePackCStringLen (p `plusPtr` ofs, len)
-                            return $! Jp.decodeImage b
-                        case eth
-                          of
-                            Left s ->
-                              do
-                                logWarn $ "Texture load error: " <> display (T.pack s)
-                                return Nothing
-                            Right di ->
-                              do
-                                let rgba8@(Jp.Image w h _) = Jp.convertRGBA8 di
-                                idx <- registerTextures (V2 w h) [(V2 0 0, rgba8)]
-                                return (Just idx)
+                    Left s -> throwError $ "Texture load error: " <> display (T.pack s)
+                    Right x -> return x
+                let rgba8@(Jp.Image w h _) = Jp.convertRGBA8 di
+                idx <- registerTextures (V2 w h) [(V2 0 0, rgba8)]
+                return idx
                         
-
-
-                    
-        
-        
-        
+warnOnException ::
+    (MonadIO m, HasLogFunc env, MonadReader env m, HasCallStack) =>
+    ExceptT Utf8Builder m a -> m (Maybe a)
+warnOnException mx = runExceptT mx >>= \case
+    Left s -> logWarn s >> return Nothing
+    Right x -> return $ Just x
                     
 listToV4 :: Vector J.Value -> Maybe (V4 Float)
 listToV4 v = V4 <$> toF (v !? 0) <*> toF (v !? 1) <*> toF (v !? 2) <*> toF (v !? 3)
