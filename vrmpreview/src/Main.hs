@@ -78,9 +78,10 @@ main =
         BS.putStr "\n"
     -}
 
-    withHolz $
+    logOpt <- logOptionsHandle stderr False
+    withHolz $ withLogFunc logOpt $ \logFunc -> runRIO logFunc $ 
       do
-        w <- openWindow Windowed (Box (V2 0 0) (V2 640 960))
+        w <- liftIO $ openWindow Windowed (Box (V2 0 0) (V2 640 960))
         
         shader <- makeVRMShader
         -- let prog = shaderProg shader
@@ -150,7 +151,10 @@ dispEType 5125 = "UNSIGNED_INT"
 dispEType 5126 = "FLOAT"
 dispEType i = "Unknown"
 
-mapToGL :: forall m. MonadIO m => GlTF -> BinChunk -> Scene -> ShaderT m (MeshMap, TxMap)
+mapToGL ::
+    forall m env.
+    (MonadIO m, HasLogFunc env, MonadReader env m, HasCallStack) =>
+    GlTF -> BinChunk -> Scene -> ShaderT m (MeshMap, TxMap)
 mapToGL gltf bin scene =
   do
     refMM <- newIORef IM.empty
@@ -195,10 +199,8 @@ mapToGL gltf bin scene =
                 tx <- baseColorTx
                 textureSource tx 
             
-        BS.putStr $ encodeUtf8 $ T.pack (show material)
-        BS.putStr "\n\n"
-        BS.putStr $ encodeUtf8 $ T.pack (show baseColorTx)
-        BS.putStr "\n\n"
+        logInfo (displayShow material)
+        logInfo (displayShow baseColorTx)
         let attrs = meshPrimitiveAttributes p
             mUv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
             midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
@@ -206,7 +208,7 @@ mapToGL gltf bin scene =
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
         locDiffuse <- lift $ locationDiffuse <$> ShaderT ask
-        registeredTx <- maybe (return Nothing) (loadAndRegisterTexture refTM) baseColorTxImg
+        registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTxImg
         liftIO $
           do
             vao <- overPtr $ glGenVertexArrays 1
@@ -276,7 +278,7 @@ mapToGL gltf bin scene =
                         glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
             return MappedPrim{..}
 
-    loadAndRegisterTexture :: MonadIO m2 => IORef TxMap -> GlTFid -> m2 (Maybe GLuint)
+    loadAndRegisterTexture :: IORef TxMap -> GlTFid -> ShaderT m (Maybe GLuint)
     loadAndRegisterTexture refTM imgIdx =
       do
         tm <- readIORef refTM
@@ -291,7 +293,7 @@ mapToGL gltf bin scene =
                   of
                     Nothing ->
                       do
-                        BS.putStr "Warning: no imageBufferView"
+                        logWarn "No imageBufferView"
                         return Nothing
                     Just bview ->
                       do
@@ -303,7 +305,10 @@ mapToGL gltf bin scene =
                             return $! Jp.decodeImage b
                         case eth
                           of
-                            Left s -> trace (T.pack s) $ return Nothing
+                            Left s ->
+                              do
+                                logWarn $ "Texture load error: " <> display (T.pack s)
+                                return Nothing
                             Right di ->
                               do
                                 let rgba8@(Jp.Image w h _) = Jp.convertRGBA8 di
@@ -361,8 +366,9 @@ drawScene gltf mm scene = mapM_ drawNode $ sceneNodes scene
     drawMesh mshVAOs = V.forM_ mshVAOs $ \vao ->
         liftIO $ drawPrim vao
 
-makeVRMShader :: IO Shader
-makeVRMShader = do
+makeVRMShader :: MonadIO m => m Shader
+makeVRMShader = liftIO $
+  do
     vertexShader <- glCreateShader GL_VERTEX_SHADER
     fragmentShader <- glCreateShader GL_FRAGMENT_SHADER
     compileShader vertexShaderSource vertexShader
