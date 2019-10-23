@@ -5,6 +5,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Main where
 
@@ -22,6 +23,7 @@ import Control.Monad.Trans.Cont
 import Control.Monad.Except
 import System.Environment (getArgs)
 import Data.GlTF
+import Data.BoundingBox (union)
 import Graphics.Holz hiding (Vertex, vertexShaderSource, fragmentShaderSource, registerTextures)
 import Graphics.GL
 import Linear hiding (trace)
@@ -43,11 +45,14 @@ die s = BS.putStr (encodeUtf8 s) >> exitFailure
 data MappedPrim = MappedPrim {
     releasePrim :: IO (),
     drawPrim :: IO ()
-}
+  }
 
 type MeshMap = IntMap (Vector MappedPrim)
 
 type TxMap = IntMap GLuint
+
+canvasSize :: V2 Float
+canvasSize = V2 640 960
 
 main :: IO ()
 main =
@@ -79,10 +84,13 @@ main =
         BS.putStr "\n"
     -}
 
+    let bbox = calcBBox gltf scene
+
     logOpt <- logOptionsHandle stderr False
     withHolz $ withLogFunc logOpt $ \logFunc -> runRIO logFunc $ 
       do
-        w <- liftIO $ openWindow Windowed (Box (V2 0 0) (V2 640 960))
+        w <- liftIO $ openWindow Windowed (Box (V2 0 0) canvasSize)
+        logInfo $ displayShow bbox
         
         shader <- makeVRMShader
         -- let prog = shaderProg shader
@@ -91,7 +99,7 @@ main =
         -- planeDir <- getUniform prog "planeDir"
 
         (vbs, txs) <- runShaderT shader $ mapToGL gltf bin scene
-        vTr <- newIORef initTrans
+        vTr <- newIORef (initTrans bbox)
 
         forever $ runReaderT `flip` w $ withFrame w $ runShaderT shader $
           do
@@ -108,14 +116,25 @@ main =
             -- forM_ vbs $ \(tx, env, vb) ->
 
 initView :: MonadHolz m => ShaderT m ()
-initView = do
+initView =
+  do
     box@(Box (V2 x0 y0) (V2 x1 y1)) <- getBoundingBox
     setViewport box
     let w = x1 - x0
         h = y1 - y0
     setProjection $ ortho (-w/2) (w/2) (-h/2) (h/2) (-200) 200
 
-initTrans = mkTransformationMat (fromDiag33 400 400 400) (V3 0.0 (-250.0) 0.0) :: M44 Float
+initTrans :: Box V3 Float -> M44 Float
+initTrans bbox = mkTransformationMat (fromDiag33 r r r) (V3 0.0 vOff 0.0)
+  where
+    Box (V3 lModel bModel _) (V3 rModel tModel _) = bbox
+    wModel = rModel - lModel
+    hModel = tModel - bModel
+    V2 wView hView = canvasSize
+    wRatio = wView / (wModel + 0.0001)
+    hRatio = hView / (hModel + 0.0001)
+    r = min wRatio hRatio
+    vOff = - (r/2) - (r * (tModel + bModel) / 2)
 
 fromDiag33 :: Num a => a -> a -> a -> M33 a
 fromDiag33 x y z = V3 (V3 x 0 0) (V3 0 y 0) (V3 0 0 z)
@@ -200,15 +219,16 @@ mapToGL gltf bin scene =
                 tx <- baseColorTx
                 textureSource tx 
             
-        logInfo (displayShow material)
+        -- logInfo (displayShow material)
         let attrs = meshPrimitiveAttributes p
             mUv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
             midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
-        logInfo (displayShow attrs)
+        -- logInfo (displayShow attrs)
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
         locDiffuse <- lift $ locationDiffuse <$> ShaderT ask
+        locSpecular <- lift $ locationSpecular <$> ShaderT ask
         registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTxImg
         liftIO $
           do
@@ -313,7 +333,13 @@ warnOnException ::
 warnOnException mx = runExceptT mx >>= \case
     Left s -> logWarn s >> return Nothing
     Right x -> return $ Just x
-                    
+
+listToV3 :: Vector J.Value -> Maybe (V3 Float)
+listToV3 v = V3 <$> toF (v !? 0) <*> toF (v !? 1) <*> toF (v !? 2)
+  where
+    toF (Just (J.fromJSON -> J.Success n)) = Just n
+    toF _ = Nothing
+
 listToV4 :: Vector J.Value -> Maybe (V4 Float)
 listToV4 v = V4 <$> toF (v !? 0) <*> toF (v !? 1) <*> toF (v !? 2) <*> toF (v !? 3)
   where
@@ -341,13 +367,44 @@ setUniform3FV loc col = liftIO $ with col $ glUniform3fv loc 1 . castPtr
 setUniform4FV :: MonadIO m => GLint -> V4 Float -> m ()
 setUniform4FV loc col = liftIO $ with col $ glUniform4fv loc 1 . castPtr
 
+newtype BoxUnion f a = BoxUnion { unBoxUnion :: Box f a }
+
+instance
+    (Applicative f, Ord a) => Semigroup (BoxUnion f a)
+  where
+    BoxUnion x <> BoxUnion y = let box@(Box !_ !_) = union x y in BoxUnion box
+
+calcBBox :: GlTF -> Scene -> Box V3 Float
+calcBBox gltf scene =
+    unBoxUnion . fromMaybe empBox $ foldMap bboxNode (sceneNodes scene)
+  where
+    empBox = BoxUnion (Box (V3 (-1) 0 (-1)) (V3 1 1 1))
+    bboxNode ndId =
+      do
+        nd <- glTFNodes gltf !? fromIntegral ndId
+        let self =
+              do
+                mshId <- nodeMesh nd
+                msh <- glTFMeshes gltf !? fromIntegral mshId
+                foldMap bboxPrim (meshPrimitives msh)
+        self <> foldMap bboxNode (nodeChildren nd)
+    bboxPrim pm =
+      do
+        accId <- HM.lookup "POSITION" $ meshPrimitiveAttributes pm
+        acc <- glTFAccessors gltf !? fromIntegral accId
+        minimum <- listToV3 $ accessorMin acc
+        maximum <- listToV3 $ accessorMax acc
+        return $ BoxUnion (Box minimum maximum)
+        
 
 drawScene :: MonadHolz m => GlTF -> MeshMap -> Scene -> ShaderT m ()
 drawScene gltf mm scene = mapM_ drawNode $ sceneNodes scene
   where
     drawNode nodeId =
       do
-        nd <- maybe (die "Node out of range") return $ glTFNodes gltf !? fromIntegral nodeId
+        nd <- maybe (die "Node out of range") return $
+          do
+            glTFNodes gltf !? fromIntegral nodeId
         runMaybeT $
           do
             mshId <- MaybeT $ return $ nodeMesh nd
