@@ -7,6 +7,11 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE BangPatterns #-}
 
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 module Main where
 
 import RIO hiding (first, second)
@@ -24,7 +29,7 @@ import Control.Monad.Except
 import System.Environment (getArgs)
 import Data.GlTF
 import Data.BoundingBox (union)
-import Graphics.Holz hiding (Vertex, vertexShaderSource, fragmentShaderSource, registerTextures)
+import Graphics.Holz.System hiding (registerTextures)
 import Graphics.GL
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
@@ -38,6 +43,35 @@ import Foreign.Marshal.Utils (with)
 import Foreign.C.String
 import Foreign.Storable
 import qualified Codec.Picture as Jp
+
+
+data MRShader = MRShader {
+    shaderProg :: GLuint,
+    locationModel :: GLint,
+    locationProjection :: GLint,
+    locationBaseColorFactor :: GLint,
+    locationMetallic :: GLint,
+    locationRoughness :: GLint,
+    locationPlaneDir :: GLint
+  }
+
+newtype MRShaderT m a = MRShaderT {
+    unMRShaderT :: ReaderT MRShader m a
+  }
+    deriving (Functor, Applicative, Monad, MonadIO, MonadTrans)
+
+instance MonadReader r m => MonadReader r (MRShaderT m)
+  where
+    ask = lift ask
+
+runMRShaderT :: MonadIO m => MRShader -> MRShaderT m a -> m a
+runMRShaderT shader action =
+  do
+    glUseProgram $ shaderProg shader
+    runReaderT (unMRShaderT action) shader
+
+askMRShader :: Monad m => (MRShader -> a) -> MRShaderT m a
+askMRShader f = MRShaderT $ f <$> ask
 
 die :: MonadIO m => Text -> m a
 die s = BS.putStr (encodeUtf8 s) >> exitFailure
@@ -98,10 +132,10 @@ main =
         -- planeLight <- getUniform prog "planeLight"
         -- planeDir <- getUniform prog "planeDir"
 
-        (vbs, txs) <- runShaderT shader $ mapToGL gltf bin scene
+        (vbs, txs) <- runMRShaderT shader $ mapToGL gltf bin scene
         vTr <- newIORef (initTrans bbox)
 
-        forever $ runReaderT `flip` w $ withFrame w $ runShaderT shader $
+        forever $ runReaderT `flip` w $ withFrame w $ runMRShaderT shader $
           do
             windowShouldClose >>= bool (return ()) exitSuccess
 
@@ -115,14 +149,18 @@ main =
             drawScene gltf vbs scene
             -- forM_ vbs $ \(tx, env, vb) ->
 
-initView :: MonadHolz m => ShaderT m ()
+initView :: MonadHolz m => MRShaderT m ()
 initView =
   do
     box@(Box (V2 x0 y0) (V2 x1 y1)) <- getBoundingBox
     setViewport box
     let w = x1 - x0
         h = y1 - y0
-    setProjection $ ortho (-w/2) (w/2) (-h/2) (h/2) (-200) 200
+        proj = ortho (-w/2) (w/2) (-h/2) (h/2) (-200) 200
+    locProjection <- askMRShader locationProjection
+    liftIO $ with proj $ \p ->
+        glUniformMatrix4fv locProjection 1 1 (castPtr p)
+    
 
 initTrans :: Box V3 Float -> M44 Float
 initTrans bbox = mkTransformationMat (fromDiag33 r r r) (V3 0.0 vOff 0.0)
@@ -174,7 +212,7 @@ dispEType i = "Unknown"
 mapToGL ::
     forall m env.
     (MonadIO m, HasLogFunc env, MonadReader env m, HasCallStack) =>
-    GlTF -> BinChunk -> Scene -> ShaderT m (MeshMap, TxMap)
+    GlTF -> BinChunk -> Scene -> MRShaderT m (MeshMap, TxMap)
 mapToGL gltf bin scene =
   do
     refMM <- newIORef IM.empty
@@ -200,7 +238,7 @@ mapToGL gltf bin scene =
         modifyIORef' refMM $
             IM.insert mshId (BV.fromListN (V.length prims) $ catMaybes mvbs)
 
-    loadPrim :: IORef TxMap -> MeshPrimitive -> ShaderT m (Maybe MappedPrim)
+    loadPrim :: IORef TxMap -> MeshPrimitive -> MRShaderT m (Maybe MappedPrim)
     loadPrim refTM p = runMaybeT $
       do
         let material = meshPrimitiveMaterial p >>= (glTFMaterials gltf !?)
@@ -219,7 +257,7 @@ mapToGL gltf bin scene =
                 tx <- baseColorTx
                 textureSource tx 
             
-        -- logInfo (displayShow material)
+        logInfo (displayShow material)
         let attrs = meshPrimitiveAttributes p
             mUv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
             midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
@@ -227,8 +265,8 @@ mapToGL gltf bin scene =
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
-        locDiffuse <- lift $ locationDiffuse <$> ShaderT ask
-        locSpecular <- lift $ locationSpecular <$> ShaderT ask
+        locDiffuse <- lift $ locationBaseColorFactor <$> MRShaderT ask
+        locPlaneDir <- lift $ locationPlaneDir <$> MRShaderT ask
         registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTxImg
         liftIO $
           do
@@ -299,7 +337,7 @@ mapToGL gltf bin scene =
                         glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
             return MappedPrim{..}
 
-    loadAndRegisterTexture :: IORef TxMap -> GlTFid -> ShaderT m (Maybe GLuint)
+    loadAndRegisterTexture :: IORef TxMap -> GlTFid -> MRShaderT m (Maybe GLuint)
     loadAndRegisterTexture refTM imgIdx = warnOnException $
       do
         tm <- readIORef refTM
@@ -378,7 +416,7 @@ calcBBox :: GlTF -> Scene -> Box V3 Float
 calcBBox gltf scene =
     unBoxUnion . fromMaybe empBox $ foldMap bboxNode (sceneNodes scene)
   where
-    empBox = BoxUnion (Box (V3 (-1) 0 (-1)) (V3 1 1 1))
+    empBox = BoxUnion (Box (V3 (-1) (-1) (-1)) (V3 1 1 1))
     bboxNode ndId =
       do
         nd <- glTFNodes gltf !? fromIntegral ndId
@@ -397,7 +435,7 @@ calcBBox gltf scene =
         return $ BoxUnion (Box minimum maximum)
         
 
-drawScene :: MonadHolz m => GlTF -> MeshMap -> Scene -> ShaderT m ()
+drawScene :: MonadHolz m => GlTF -> MeshMap -> Scene -> MRShaderT m ()
 drawScene gltf mm scene = mapM_ drawNode $ sceneNodes scene
   where
     drawNode nodeId =
@@ -415,7 +453,7 @@ drawScene gltf mm scene = mapM_ drawNode $ sceneNodes scene
     drawMesh mshVAOs = V.forM_ mshVAOs $ \vao ->
         liftIO $ drawPrim vao
 
-makeVRMShader :: MonadIO m => m Shader
+makeVRMShader :: MonadIO m => m MRShader
 makeVRMShader = liftIO $
   do
     vertexShader <- glCreateShader GL_VERTEX_SHADER
@@ -443,14 +481,16 @@ makeVRMShader = liftIO $
 
     locationModel <- getUniform shaderProg "model"
     locationProjection <- getUniform shaderProg "projection"
-    locationDiffuse <- getUniform shaderProg "baseColorFactor"
-    locationSpecular <- getUniform shaderProg "specular"
+    locationBaseColorFactor <- getUniform shaderProg "baseColorFactor"
+    locationPlaneDir <- getUniform shaderProg "planeDir"
 
     with (V4 1 1 1 1 :: V4 Float) $ \ptr -> do
-        glUniform4fv locationDiffuse 1 (castPtr ptr)
-        glUniform4fv locationSpecular 1 (castPtr ptr)
+        glUniform4fv locationBaseColorFactor 1 (castPtr ptr)
 
-    return Shader{..}
+    with (V3 1 1 1 :: V3 Float) $ \ptr -> do
+        glUniform4fv locationPlaneDir 1 (castPtr ptr)
+
+    return MRShader{..}
 
 
 vertexShaderSource :: String
@@ -481,7 +521,7 @@ fragmentShaderSource = "#version 330\n\
     \in vec4 color; \
     \uniform sampler2D tex; \
     \uniform vec4 baseColorFactor; \
-    \uniform vec3 specular; \
+    \uniform vec3 planeDir; \
     \void main(void){ \
     \  fragColor = texture(tex, texUV) * color * baseColorFactor; \
     \}"
