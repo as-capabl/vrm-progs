@@ -384,19 +384,6 @@ listToV4 v = V4 <$> toF (v !? 0) <*> toF (v !? 1) <*> toF (v !? 2) <*> toF (v !?
     toF (Just (J.fromJSON -> J.Success n)) = Just n
     toF _ = Nothing
 
-            
-withAcc :: forall b m. (MonadIO m, MonadUnliftIO m) => GlTF -> Accessor -> BinChunk -> (Ptr () -> m b) -> m b
-withAcc gltf acc bin f =
-  do
-    bview <- maybe (die "BufferView") return $
-      do
-        mx <- accessorBufferView acc
-        glTFBufferViews gltf !? mx
-    let
-        ofs = fromMaybe 0 (bufferViewByteOffset bview) 
-    withRunInIO $ \run -> withForeignPtr bin $ \p ->
-        run $ f (p `plusPtr` ofs)
-
 ptrOfs acc = nullPtr `plusPtr` fromMaybe 0 (accessorByteOffset acc)
 
 setUniform3FV :: MonadIO m => GLint -> V3 Float -> m ()

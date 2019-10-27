@@ -2,20 +2,24 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module
     Data.GlTF.Read
       (
         BinChunk,
         withBin,
-        readGlbRaw
+        readGlbRaw,
+        withAcc
       )
 where
 
 import Data.ByteString (ByteString)
+import Data.Maybe (fromMaybe)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Text (Text)
+import Data.Vector ((!?))
 import qualified Data.Text as T
 import Data.Bifunctor (first, second)
 import Data.Int (Int32)
@@ -27,6 +31,8 @@ import Foreign.Marshal.Alloc
 import System.IO
 import Data.GlTF.GlTF
 import qualified Data.Aeson as J
+import UnliftIO (MonadUnliftIO, withRunInIO)
+import Control.Monad.Catch
 
 type BinChunk = ForeignPtr ()
 
@@ -82,3 +88,22 @@ hGetStorable h = liftIO $ alloca $ \p -> -- mallocForegiPtr is faster?
   do
     hGetBuf h p (sizeOf @a undefined)
     peek p
+
+data GlTFException = GlTFIncompleteFile String
+  deriving Show
+
+instance Exception GlTFException where {}
+
+withAcc :: forall b m.
+    (MonadIO m, MonadUnliftIO m, MonadThrow m) =>
+    GlTF -> Accessor -> BinChunk -> (Ptr () -> m b) -> m b
+withAcc gltf acc bin f =
+  do
+    bview <- maybe (throwM $ GlTFIncompleteFile "Inconsistent in BufferView") return $
+      do
+        mx <- accessorBufferView acc
+        glTFBufferViews gltf !? mx
+    let
+        ofs = fromMaybe 0 (bufferViewByteOffset bview) 
+    withRunInIO $ \run -> withForeignPtr bin $ \p ->
+        run $ f (p `plusPtr` ofs)

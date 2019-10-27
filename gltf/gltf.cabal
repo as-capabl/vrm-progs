@@ -27,6 +27,8 @@ library
                   , transformers
                   , containers
                   , bytestring
+                  , unliftio
+                  , exceptions
                   , text
                   , vector
                   , unordered-containers
