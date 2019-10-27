@@ -92,7 +92,7 @@ main :: IO ()
 main =
   do
     fname : _ <- getArgs
-    (gltf, bin) <- liftIO (readGlbRaw fname) >>= \case
+    (gltf, bin) <- liftIO (readGlb fname) >>= \case
         Left err -> die err
         Right x -> return x
     

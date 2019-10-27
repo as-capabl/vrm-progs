@@ -10,6 +10,7 @@ module
         BinChunk,
         withBin,
         readGlbRaw,
+        readGlb,
         withAcc
       )
 where
@@ -42,7 +43,7 @@ withBin c ofs _ action = withForeignPtr c $ \p -> action (p `plusPtr` ofs)
 magic :: ByteString
 magic = "glTF"
 
-readGlbRaw :: FilePath -> IO (Either Text (GlTF, BinChunk))
+readGlbRaw :: FilePath -> IO (Either Text (BL.ByteString, BinChunk))
 readGlbRaw fname = withBinaryFile fname ReadMode $ \h -> runExceptT $ 
   do
     -- Check magic bytes.
@@ -58,10 +59,7 @@ readGlbRaw fname = withBinaryFile fname ReadMode $ \h -> runExceptT $
     (_, cjson) <- readChunk h (liftIO . BL.hGet h)
     (_, bin) <- readChunk h (liftIO . hGetForeignPtr h)
 
-    case J.eitherDecode cjson
-      of
-        Left err -> throwError $ T.pack err
-        Right j -> return (j, bin)
+    return (cjson, bin)
   where
     readChunk h f =
       do
@@ -77,6 +75,15 @@ readGlbRaw fname = withBinaryFile fname ReadMode $ \h -> runExceptT $
             hGetBuf h p len
         return ret
         
+
+readGlb :: FilePath -> IO (Either Text (GlTF, BinChunk))
+readGlb fname = runExceptT $
+  do
+    (cjson, bin) <- ExceptT $ readGlbRaw fname
+    case J.eitherDecode cjson
+      of
+        Left err -> throwError $ T.pack err
+        Right j -> return (j, bin)
 
 
 guardExcept :: MonadError e m => Bool -> e -> m ()
