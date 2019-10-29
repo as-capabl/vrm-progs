@@ -261,7 +261,7 @@ mapToGL gltf bin scene =
         let attrs = meshPrimitiveAttributes p
             mUv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
             midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
-        -- logInfo (displayShow attrs)
+        logInfo (displayShow attrs)
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
@@ -517,10 +517,10 @@ registerTextures :: MonadIO m => V2 Int -> [(V2 Int, Jp.Image Jp.PixelRGBA8)] ->
 registerTextures (V2 sw sh) imgs = liftIO $ do
     tex <- overPtr (glGenTextures 1)
     glBindTexture GL_TEXTURE_2D tex
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR_MIPMAP_LINEAR
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
     glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_LINEAR
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_CLAMP_TO_EDGE
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_CLAMP_TO_EDGE
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_REPEAT
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_REPEAT
     glPixelStorei GL_UNPACK_ALIGNMENT 4
     glPixelStorei GL_UNPACK_IMAGE_HEIGHT 0
     glPixelStorei GL_UNPACK_LSB_FIRST 0

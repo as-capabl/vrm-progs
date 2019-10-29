@@ -9,6 +9,7 @@ import RIO.Vector ((!?), imapM_)
 import RIO.File (writeBinaryFile)
 import qualified RIO.ByteString as BS
 import qualified Data.ByteString.Unsafe as BS
+import qualified RIO.ByteString.Lazy as BL
 import qualified RIO.Text as T
 import Control.Monad.Except
 import Data.GlTF
@@ -24,11 +25,12 @@ main :: IO ()
 main = runSimpleApp $
   do
     fname : _ <- liftIO getArgs
-    (gltf, bin) <- liftIO (readGlb fname) >>= \case
+    (gltf, bin) <- liftIO (readGlbRaw fname) >>= \case
         Left err -> die (display err)
         Right x -> return x
     -- BS.hPut stdout $ encodeUtf8 . utf8BuilderToText $ displayShow gltf
-    saveBuffers gltf bin
+    BL.hPut stdout gltf
+    -- saveBuffers gltf bin
     return ()
 
 saveBuffers gltf bin = imapM_ go $ glTFImages gltf
