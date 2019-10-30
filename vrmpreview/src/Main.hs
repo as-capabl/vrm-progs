@@ -29,7 +29,7 @@ import Control.Monad.Except
 import System.Environment (getArgs)
 import Data.GlTF
 import Data.BoundingBox (union)
-import Graphics.Holz.System hiding (registerTextures)
+import Graphics.Holz.System hiding (registerTextures, Texture)
 import Graphics.GL
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
@@ -252,10 +252,6 @@ mapToGL gltf bin scene =
                 m <- materialPbr
                 txInfo <- materialPbrMetallicRoughnessBaseColorTexture m
                 glTFTextures gltf !? textureInfoIndex txInfo
-            baseColorTxImg =
-              do
-                tx <- baseColorTx
-                textureSource tx 
             
         logInfo (displayShow material)
         let attrs = meshPrimitiveAttributes p
@@ -267,7 +263,7 @@ mapToGL gltf bin scene =
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
         locDiffuse <- lift $ locationBaseColorFactor <$> MRShaderT ask
         locPlaneDir <- lift $ locationPlaneDir <$> MRShaderT ask
-        registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTxImg
+        registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTx
         liftIO $
           do
             vao <- overPtr $ glGenVertexArrays 1
@@ -337,15 +333,17 @@ mapToGL gltf bin scene =
                         glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
             return MappedPrim{..}
 
-    loadAndRegisterTexture :: IORef TxMap -> GlTFid -> MRShaderT m (Maybe GLuint)
-    loadAndRegisterTexture refTM imgIdx = warnOnException $
+    loadAndRegisterTexture :: IORef TxMap -> Texture -> MRShaderT m (Maybe GLuint)
+    loadAndRegisterTexture refTM tx = warnOnException $
       do
+        imgIdx <- maybe (throwError "Image") return $ textureSource tx
         tm <- readIORef refTM
         case IM.lookup imgIdx tm
           of
             Just t -> return t
             Nothing ->
               do
+                -- Get bufferView
                 let img = glTFImages gltf !? imgIdx
                     bviewIdx = img >>= imageBufferView
                 bview <-
@@ -353,6 +351,7 @@ mapToGL gltf bin scene =
                         bviewIdx >>= (glTFBufferViews gltf !?)
                 let ofs = fromMaybe 0 $ bufferViewByteOffset bview
                     len = bufferViewByteLength bview
+                -- Load image
                 eth <- liftIO $ withForeignPtr bin $ \p ->
                   do
                     b <- BS.unsafePackCStringLen (p `plusPtr` ofs, len)
@@ -362,7 +361,14 @@ mapToGL gltf bin scene =
                     Left s -> throwError $ "Texture load error: " <> display (T.pack s)
                     Right x -> return x
                 let rgba8@(Jp.Image w h _) = Jp.convertRGBA8 di
-                idx <- registerTextures (V2 w h) [(V2 0 0, rgba8)]
+                -- Load sampler
+                let empSmp = Sampler Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+                    smp = fromMaybe empSmp $
+                      do
+                        smpIdx <- textureSampler tx
+                        glTFSamplers gltf !? smpIdx
+                logInfo $ displayShow smp
+                idx <- registerTextures smp (V2 w h) [(V2 0 0, rgba8)]
                 return idx
                         
 warnOnException ::
@@ -513,14 +519,14 @@ fragmentShaderSource = "#version 330\n\
     \  fragColor = texture(tex, texUV) * color * baseColorFactor; \
     \}"
 
-registerTextures :: MonadIO m => V2 Int -> [(V2 Int, Jp.Image Jp.PixelRGBA8)] -> m GLuint
-registerTextures (V2 sw sh) imgs = liftIO $ do
+registerTextures :: MonadIO m => Sampler -> V2 Int -> [(V2 Int, Jp.Image Jp.PixelRGBA8)] -> m GLuint
+registerTextures Sampler{..} (V2 sw sh) imgs = liftIO $ do
     tex <- overPtr (glGenTextures 1)
     glBindTexture GL_TEXTURE_2D tex
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_LINEAR
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_REPEAT
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_REPEAT
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER $ fromMaybe GL_LINEAR samplerMinFilter
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER $ fromMaybe GL_LINEAR samplerMagFilter
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S $ fromMaybe GL_REPEAT samplerWrapS
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T $ fromMaybe GL_REPEAT samplerWrapT
     glPixelStorei GL_UNPACK_ALIGNMENT 4
     glPixelStorei GL_UNPACK_IMAGE_HEIGHT 0
     glPixelStorei GL_UNPACK_LSB_FIRST 0
