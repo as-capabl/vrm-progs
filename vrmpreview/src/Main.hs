@@ -156,7 +156,7 @@ initView =
     setViewport box
     let w = x1 - x0
         h = y1 - y0
-        proj = ortho (-w/2) (w/2) (-h/2) (h/2) (-200) 200
+        proj = ortho (-w/2) (w/2) (-h/2) (h/2) (-w/2) (w/2)
     locProjection <- askMRShader locationProjection
     liftIO $ with proj $ \p ->
         glUniformMatrix4fv locProjection 1 1 (castPtr p)
@@ -172,7 +172,7 @@ initTrans bbox = mkTransformationMat (fromDiag33 r r r) (V3 0.0 vOff 0.0)
     wRatio = wView / (wModel + 0.0001)
     hRatio = hView / (hModel + 0.0001)
     r = min wRatio hRatio
-    vOff = - (r/2) - (r * (tModel + bModel) / 2)
+    vOff = - (r * (tModel - bModel) / 2)
 
 fromDiag33 :: Num a => a -> a -> a -> M33 a
 fromDiag33 x y z = V3 (V3 x 0 0) (V3 0 y 0) (V3 0 0 z)
