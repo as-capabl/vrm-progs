@@ -50,6 +50,7 @@ data MRShader = MRShader {
     locationModel :: GLint,
     locationProjection :: GLint,
     locationPlaneDir :: GLint,
+    locationSight :: GLint,
     locationBaseColorFactor :: GLint,
     locationMetallic :: GLint,
     locationRoughness :: GLint
@@ -159,9 +160,13 @@ initView =
     let w = x1 - x0
         h = y1 - y0
         proj = ortho (-w/2) (w/2) (-h/2) (h/2) (-w/2) (w/2)
+        sight = V3 0 0 (-1) :: V3 Float
     locProjection <- askMRShader locationProjection
     liftIO $ with proj $ \p ->
         glUniformMatrix4fv locProjection 1 1 (castPtr p)
+    locSight <- askMRShader locationSight
+    liftIO $ with sight $ \p ->
+        glUniform4fv locSight 1 (castPtr p)
     
 
 initTrans :: Box V3 Float -> M44 Float
@@ -475,6 +480,7 @@ makeVRMShader = liftIO $
 
     locationModel <- getUniform shaderProg "model"
     locationProjection <- getUniform shaderProg "projection"
+    locationSight <- getUniform shaderProg "sight"
     locationBaseColorFactor <- getUniform shaderProg "baseColorFactor"
     locationPlaneDir <- getUniform shaderProg "planeDir"
 
@@ -516,10 +522,14 @@ fragmentShaderSource = "#version 330\n\
     \uniform sampler2D tex; \
     \uniform vec4 baseColorFactor; \
     \uniform vec3 planeDir; \
+    \uniform vec3 sight; \
     \void main(void){ \
+    \  vec3 nnorm = normalize(normal); \
+    \  float lamValue = dot(nnorm, planeDir); \
+    \  float nlamValue = dot(cross(nnorm, planeDir), -cross(nnorm, sight)); \
     \  fragColor = \
     \    texture(tex, texUV) * color * baseColorFactor \
-    \    * dot(normalize(normal), planeDir);\
+    \    * (0.8 * lamValue + 1.0 * abs(nlamValue));\
     \  fragColor[3] = 1.0;\
     \}"
 
