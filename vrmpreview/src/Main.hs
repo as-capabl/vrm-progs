@@ -49,10 +49,10 @@ data MRShader = MRShader {
     shaderProg :: GLuint,
     locationModel :: GLint,
     locationProjection :: GLint,
+    locationPlaneDir :: GLint,
     locationBaseColorFactor :: GLint,
     locationMetallic :: GLint,
-    locationRoughness :: GLint,
-    locationPlaneDir :: GLint
+    locationRoughness :: GLint
   }
 
 newtype MRShaderT m a = MRShaderT {
@@ -145,6 +145,8 @@ main =
             initView
             liftIO $ with tr $ \p ->
                 glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
+            liftIO $ with (V3 0.577 0.577 0.577 :: V3 Float) $ \p ->
+                glUniform3fv (locationPlaneDir shader) 1 (castPtr p)
             clearColor grayColor
             drawScene gltf vbs scene
             -- forM_ vbs $ \(tx, env, vb) ->
@@ -253,16 +255,15 @@ mapToGL gltf bin scene =
                 txInfo <- materialPbrMetallicRoughnessBaseColorTexture m
                 glTFTextures gltf !? textureInfoIndex txInfo
             
-        logInfo (displayShow material)
+        -- logInfo (displayShow material)
         let attrs = meshPrimitiveAttributes p
             mUv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
             midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
-        logInfo (displayShow attrs)
+        -- logInfo (displayShow attrs)
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
         locDiffuse <- lift $ locationBaseColorFactor <$> MRShaderT ask
-        locPlaneDir <- lift $ locationPlaneDir <$> MRShaderT ask
         registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTx
         liftIO $
           do
@@ -501,7 +502,7 @@ vertexShaderSource = "#version 330\n\
     \  viewPos = model * vec4(in_Position, 1.0); \
     \  gl_Position = projection * viewPos; \
     \  texUV = in_UV; \
-    \  normal = in_Normal;\
+    \  normal = mat3(model) * in_Normal;\
     \  color = vec4(1.0, 1.0, 1.0, 1.0);\
     \}"
 
@@ -516,7 +517,10 @@ fragmentShaderSource = "#version 330\n\
     \uniform vec4 baseColorFactor; \
     \uniform vec3 planeDir; \
     \void main(void){ \
-    \  fragColor = texture(tex, texUV) * color * baseColorFactor; \
+    \  fragColor = \
+    \    texture(tex, texUV) * color * baseColorFactor \
+    \    * dot(normalize(normal), planeDir);\
+    \  fragColor[3] = 1.0;\
     \}"
 
 registerTextures :: MonadIO m => Sampler -> V2 Int -> [(V2 Int, Jp.Image Jp.PixelRGBA8)] -> m GLuint
@@ -539,8 +543,15 @@ registerTextures Sampler{..} (V2 sw sh) imgs = liftIO $ do
 
     glTexStorage2D GL_TEXTURE_2D level GL_SRGB8_ALPHA8 (fromIntegral sw) (fromIntegral sh)
 
-    forM_ imgs $ \(V2 x y, Jp.Image w h vec) -> SV.unsafeWith vec
-        $ glTexSubImage2D GL_TEXTURE_2D 0 (fromIntegral x) (fromIntegral y) (fromIntegral w) (fromIntegral h) GL_RGBA GL_UNSIGNED_BYTE
+    forM_ imgs $ \(V2 x y, Jp.Image w h vec) -> SV.unsafeWith vec $
+        glTexSubImage2D
+            GL_TEXTURE_2D 0
+            (fromIntegral x)
+            (fromIntegral y)
+            (fromIntegral w)
+            (fromIntegral h)
+            GL_RGBA
+            GL_UNSIGNED_BYTE
         . castPtr
 
     glGenerateMipmap GL_TEXTURE_2D
