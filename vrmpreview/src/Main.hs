@@ -53,7 +53,8 @@ data MRShader = MRShader {
     locationSight :: GLint,
     locationBaseColorFactor :: GLint,
     locationMetallic :: GLint,
-    locationRoughness :: GLint
+    locationLamFactor :: GLint,
+    locationNlamFactor :: GLint
   }
 
 newtype MRShaderT m a = MRShaderT {
@@ -166,7 +167,7 @@ initView =
         glUniformMatrix4fv locProjection 1 1 (castPtr p)
     locSight <- askMRShader locationSight
     liftIO $ with sight $ \p ->
-        glUniform4fv locSight 1 (castPtr p)
+        glUniform3fv locSight 1 (castPtr p)
     
 
 initTrans :: Box V3 Float -> M44 Float
@@ -253,12 +254,13 @@ mapToGL gltf bin scene =
             baseColorFactor = fromMaybe (V4 1.0 1.0 1.0 1.0) $
               do
                 m <- materialPbr
-                listToV4 $ materialPbrMetallicRoughnessBaseColorFactor m
+                listToV4 $ realToFrac <$>materialPbrMetallicRoughnessBaseColorFactor m
             baseColorTx =
               do
                 m <- materialPbr
                 txInfo <- materialPbrMetallicRoughnessBaseColorTexture m
                 glTFTextures gltf !? textureInfoIndex txInfo
+            roughness = realToFrac $ fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessRoughnessFactor
             
         -- logInfo (displayShow material)
         let attrs = meshPrimitiveAttributes p
@@ -269,6 +271,8 @@ mapToGL gltf bin scene =
         norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
         locDiffuse <- lift $ locationBaseColorFactor <$> MRShaderT ask
+        locLamFactor <- lift $ locationLamFactor <$> MRShaderT ask
+        locNlamFactor <- lift $ locationNlamFactor <$> MRShaderT ask
         registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTx
         liftIO $
           do
@@ -335,6 +339,8 @@ mapToGL gltf bin scene =
                       do
                         glBindVertexArray vao
                         setUniform4FV locDiffuse baseColorFactor
+                        glUniform1f locLamFactor $ 1 - 0.5 * roughness / (roughness + 0.33)
+                        glUniform1f locNlamFactor $ 0.45 * roughness / (roughness + 0.09)
                         glBindTexture GL_TEXTURE_2D $ fromMaybe 0 registeredTx
                         glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
             return MappedPrim{..}
@@ -384,17 +390,11 @@ warnOnException mx = runExceptT mx >>= \case
     Left s -> logWarn s >> return Nothing
     Right x -> return $ Just x
 
-listToV3 :: Vector J.Value -> Maybe (V3 Float)
-listToV3 v = V3 <$> toF (v !? 0) <*> toF (v !? 1) <*> toF (v !? 2)
-  where
-    toF (Just (J.fromJSON -> J.Success n)) = Just n
-    toF _ = Nothing
+listToV3 :: Vector Float -> Maybe (V3 Float)
+listToV3 v = V3 <$> (v !? 0) <*> (v !? 1) <*> (v !? 2)
 
-listToV4 :: Vector J.Value -> Maybe (V4 Float)
-listToV4 v = V4 <$> toF (v !? 0) <*> toF (v !? 1) <*> toF (v !? 2) <*> toF (v !? 3)
-  where
-    toF (Just (J.fromJSON -> J.Success n)) = Just n
-    toF _ = Nothing
+listToV4 :: Vector Float -> Maybe (V4 Float)
+listToV4 v = V4 <$> (v !? 0) <*> (v !? 1) <*> (v !? 2) <*> (v !? 3)
 
 ptrOfs acc = nullPtr `plusPtr` fromMaybe 0 (accessorByteOffset acc)
 
@@ -429,8 +429,8 @@ calcBBox gltf scene =
       do
         accId <- HM.lookup "POSITION" $ meshPrimitiveAttributes pm
         acc <- glTFAccessors gltf !? fromIntegral accId
-        minimum <- listToV3 $ accessorMin acc
-        maximum <- listToV3 $ accessorMax acc
+        minimum <- listToV3 $ realToFrac <$> accessorMin acc
+        maximum <- listToV3 $ realToFrac <$> accessorMax acc
         return $ BoxUnion (Box minimum maximum)
         
 
@@ -483,6 +483,8 @@ makeVRMShader = liftIO $
     locationSight <- getUniform shaderProg "sight"
     locationBaseColorFactor <- getUniform shaderProg "baseColorFactor"
     locationPlaneDir <- getUniform shaderProg "planeDir"
+    locationLamFactor <- getUniform shaderProg "lamFactor"
+    locationNlamFactor <- getUniform shaderProg "nlamFactor"
 
     with (V4 1 1 1 1 :: V4 Float) $ \ptr -> do
         glUniform4fv locationBaseColorFactor 1 (castPtr ptr)
@@ -523,13 +525,15 @@ fragmentShaderSource = "#version 330\n\
     \uniform vec4 baseColorFactor; \
     \uniform vec3 planeDir; \
     \uniform vec3 sight; \
+    \uniform float lamFactor; \
+    \uniform float nlamFactor; \
     \void main(void){ \
     \  vec3 nnorm = normalize(normal); \
     \  float lamValue = dot(nnorm, planeDir); \
-    \  float nlamValue = dot(cross(nnorm, planeDir), -cross(nnorm, sight)); \
+    \  float nlamValue = dot(cross(planeDir, nnorm), cross(nnorm, sight)); \
     \  fragColor = \
     \    texture(tex, texUV) * color * baseColorFactor \
-    \    * (0.8 * lamValue + 1.0 * abs(nlamValue));\
+    \    * min(1, lamFactor * lamValue + nlamFactor * abs(nlamValue) + 0.5);\
     \  fragColor[3] = 1.0;\
     \}"
 
