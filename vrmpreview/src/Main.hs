@@ -261,6 +261,7 @@ mapToGL gltf bin scene =
                 m <- materialPbr
                 txInfo <- materialPbrMetallicRoughnessBaseColorTexture m
                 glTFTextures gltf !? textureInfoIndex txInfo
+            metallic = realToFrac $ fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessMetallicFactor
             roughness = realToFrac $ fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessRoughnessFactor
             
         -- logInfo (displayShow material)
@@ -340,8 +341,8 @@ mapToGL gltf bin scene =
                       do
                         glBindVertexArray vao
                         setUniform4FV locDiffuse baseColorFactor
-                        glUniform1f locLamFactor $ 1 - 0.5 * roughness ^ 2 / (roughness ^ 2 + 0.33)
-                        glUniform1f locNlamFactor $ 0.45 * roughness ^ 2 / (roughness ^ 2 + 0.09)
+                        glUniform1f locLamFactor $ metallic
+                        glUniform1f locNlamFactor $ roughness
                         glBindTexture GL_TEXTURE_2D $ fromMaybe 0 registeredTx
                         glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
             return MappedPrim{..}
@@ -520,6 +521,9 @@ vertexShaderSource = [r|
 fragmentShaderSource :: String
 fragmentShaderSource = [r|
     #version 330
+    #define PI 3.1415926538
+    #define dielectricSpecular vec4(0.04, 0.04, 0.04, 1)
+    #define black vec4(0, 0, 0, 1)
     out vec4 fragColor;
     in vec2 texUV;
     in vec3 normal;
@@ -533,13 +537,21 @@ fragmentShaderSource = [r|
     uniform float nlamFactor;
     void main(void){
         vec3 nnorm = normalize(normal);
+        vec3 h = normalize(sight + planeDir);
+
+        vec4 baseColor = texture(tex, texUV) * color * baseColorFactor;
+        vec4 dfColor = mix(baseColor * (1 - dielectricSpecular[0]), black, lamFactor);
+        vec4 spColor = mix(dielectricSpecular, baseColor, lamFactor); 
+
         float lamValue = dot(nnorm, planeDir);
-        float nlamValue =
-            dot(cross(planeDir, nnorm), cross(nnorm, sight))
-            * min(1, lamValue / dot(nnorm, sight));
+        float spValue = dot(nnorm, h);
+
+        vec4 fresnel = spColor + (vec4(1,1,1,1) - spColor) * pow(1.0 - dot(sight, h), 5);
         fragColor =
-            texture(tex, texUV) * color * baseColorFactor
-            * (lamFactor * lamValue + nlamFactor * max(0, nlamValue) + 0.5);
+            spValue * fresnel
+            + lamValue * ((vec4(1,1,1,1) - fresnel) * dfColor) * 0.5
+            + 0.5 * baseColor
+            ;
         fragColor[3] = 1.0;
     }
 |]
