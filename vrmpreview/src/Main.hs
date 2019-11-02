@@ -6,6 +6,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -43,7 +44,7 @@ import Foreign.Marshal.Utils (with)
 import Foreign.C.String
 import Foreign.Storable
 import qualified Codec.Picture as Jp
-
+import Text.RawString.QQ (r)
 
 data MRShader = MRShader {
     shaderProg :: GLuint,
@@ -496,48 +497,52 @@ makeVRMShader = liftIO $
 
 
 vertexShaderSource :: String
-vertexShaderSource = "#version 330\n\
-    \uniform mat4 projection; \
-    \uniform mat4 model; \
-    \in vec3 in_Position; \
-    \in vec2 in_UV; \
-    \in vec3 in_Normal; \
-    \out vec2 texUV; \
-    \out vec3 normal; \
-    \out vec4 viewPos; \
-    \out vec4 color; \
-    \void main(void) { \
-    \  viewPos = model * vec4(in_Position, 1.0); \
-    \  gl_Position = projection * viewPos; \
-    \  texUV = in_UV; \
-    \  normal = mat3(model) * in_Normal;\
-    \  color = vec4(1.0, 1.0, 1.0, 1.0);\
-    \}"
+vertexShaderSource = [r|
+    #version 330
+    uniform mat4 projection;
+    uniform mat4 model;
+    in vec3 in_Position;
+    in vec2 in_UV;
+    in vec3 in_Normal;
+    out vec2 texUV;
+    out vec3 normal;
+    out vec4 viewPos;
+    out vec4 color;
+    void main(void) {
+        viewPos = model * vec4(in_Position, 1.0);
+        gl_Position = projection * viewPos;
+        texUV = in_UV;
+        normal = mat3(model) * in_Normal;
+        color = vec4(1.0, 1.0, 1.0, 1.0);
+    }
+|]
 
 fragmentShaderSource :: String
-fragmentShaderSource = "#version 330\n\
-    \out vec4 fragColor; \
-    \in vec2 texUV; \
-    \in vec3 normal; \
-    \in vec4 viewPos; \
-    \in vec4 color; \
-    \uniform sampler2D tex; \
-    \uniform vec4 baseColorFactor; \
-    \uniform vec3 planeDir; \
-    \uniform vec3 sight; \
-    \uniform float lamFactor; \
-    \uniform float nlamFactor; \
-    \void main(void){ \
-    \  vec3 nnorm = normalize(normal); \
-    \  float lamValue = dot(nnorm, planeDir); \
-    \  float nlamValue = \
-    \       dot(cross(planeDir, nnorm), cross(nnorm, sight)) \
-    \       * min(1, lamValue / dot(nnorm, sight)); \
-    \  fragColor = \
-    \    texture(tex, texUV) * color * baseColorFactor \
-    \    * (lamFactor * lamValue + nlamFactor * max(0, nlamValue) + 0.5);\
-    \  fragColor[3] = 1.0;\
-    \}"
+fragmentShaderSource = [r|
+    #version 330
+    out vec4 fragColor;
+    in vec2 texUV;
+    in vec3 normal;
+    in vec4 viewPos;
+    in vec4 color;
+    uniform sampler2D tex;
+    uniform vec4 baseColorFactor;
+    uniform vec3 planeDir;
+    uniform vec3 sight;
+    uniform float lamFactor;
+    uniform float nlamFactor;
+    void main(void){
+        vec3 nnorm = normalize(normal);
+        float lamValue = dot(nnorm, planeDir);
+        float nlamValue =
+            dot(cross(planeDir, nnorm), cross(nnorm, sight))
+            * min(1, lamValue / dot(nnorm, sight));
+        fragColor =
+            texture(tex, texUV) * color * baseColorFactor
+            * (lamFactor * lamValue + nlamFactor * max(0, nlamValue) + 0.5);
+        fragColor[3] = 1.0;
+    }
+|]
 
 registerTextures :: MonadIO m => Sampler -> V2 Int -> [(V2 Int, Jp.Image Jp.PixelRGBA8)] -> m GLuint
 registerTextures Sampler{..} (V2 sw sh) imgs = liftIO $ do
