@@ -339,8 +339,8 @@ mapToGL gltf bin scene =
                       do
                         glBindVertexArray vao
                         setUniform4FV locDiffuse baseColorFactor
-                        glUniform1f locLamFactor $ 1 - 0.5 * roughness / (roughness + 0.33)
-                        glUniform1f locNlamFactor $ 0.45 * roughness / (roughness + 0.09)
+                        glUniform1f locLamFactor $ 1 - 0.5 * roughness ^ 2 / (roughness ^ 2 + 0.33)
+                        glUniform1f locNlamFactor $ 0.45 * roughness ^ 2 / (roughness ^ 2 + 0.09)
                         glBindTexture GL_TEXTURE_2D $ fromMaybe 0 registeredTx
                         glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
             return MappedPrim{..}
@@ -530,10 +530,12 @@ fragmentShaderSource = "#version 330\n\
     \void main(void){ \
     \  vec3 nnorm = normalize(normal); \
     \  float lamValue = dot(nnorm, planeDir); \
-    \  float nlamValue = dot(cross(planeDir, nnorm), cross(nnorm, sight)); \
+    \  float nlamValue = \
+    \       dot(cross(planeDir, nnorm), cross(nnorm, sight)) \
+    \       * min(1, lamValue / dot(nnorm, sight)); \
     \  fragColor = \
     \    texture(tex, texUV) * color * baseColorFactor \
-    \    * min(1, lamFactor * lamValue + nlamFactor * abs(nlamValue) + 0.5);\
+    \    * (lamFactor * lamValue + nlamFactor * max(0, nlamValue) + 0.5);\
     \  fragColor[3] = 1.0;\
     \}"
 
