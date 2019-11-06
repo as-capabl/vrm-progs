@@ -276,76 +276,84 @@ mapToGL gltf bin scene =
         locLamFactor <- lift $ locationLamFactor <$> MRShaderT ask
         locNlamFactor <- lift $ locationNlamFactor <$> MRShaderT ask
         registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTx
-        liftIO $
-          do
-            vao <- overPtr $ glGenVertexArrays 1
-            glBindVertexArray vao
-            -- VBOs
-            let nBuf = 4
-            vboM <- SMV.unsafeNew nBuf
-            SMV.unsafeWith vboM $ glGenBuffers (fromIntegral nBuf)
-            vbo <- SV.unsafeFreeze vboM
-            
-            glBindBuffer GL_ARRAY_BUFFER $ vbo V.! 0
-            glVertexAttribPointer 0 3 GL_FLOAT GL_FALSE 0 nullPtr
-            glEnableVertexAttribArray 0
-            withAcc gltf pos bin $ \v ->
+
+        let idcBuf_elem idcs eleSiz vbo i =
               do
-                glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount pos)) v GL_STATIC_DRAW
+                let idxCount = fromIntegral $ accessorCount idcs
+                glBindBuffer GL_ELEMENT_ARRAY_BUFFER $ vbo V.! i
+                withAcc gltf idcs bin $ \v ->
+                    glBufferData GL_ELEMENT_ARRAY_BUFFER (idxCount * eleSiz) v GL_STATIC_DRAW
+                
+        let drawPrim_elem idcs idxT eleSiz vao =
+              do
+                let idxCount = fromIntegral $ accessorCount idcs
+                glBindVertexArray vao
+                setUniform4FV locDiffuse baseColorFactor
+                glUniform1f locLamFactor $ metallic
+                glUniform1f locNlamFactor $ roughness
+                glBindTexture GL_TEXTURE_2D $ fromMaybe 0 registeredTx
+                glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
 
-            case mUv
-              of
-                Just uv ->
-                  do
-                    glBindBuffer GL_ARRAY_BUFFER $ vbo V.! 1
-                    glVertexAttribPointer 1 2 GL_FLOAT GL_FALSE 0 nullPtr
-                    glEnableVertexAttribArray 1
-                    withAcc gltf uv bin $ \v ->
-                        glBufferData GL_ARRAY_BUFFER (2 * 4 * fromIntegral (accessorCount uv)) v GL_STATIC_DRAW
-                Nothing ->
-                    return ()
-    
-            glBindBuffer GL_ARRAY_BUFFER $ vbo V.! 2
-            glVertexAttribPointer 2 3 GL_FLOAT GL_FALSE 0 nullPtr
-            glEnableVertexAttribArray 2
-            withAcc gltf norm bin $ \v ->
-                glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount norm)) v GL_STATIC_DRAW
-
-            let releasePrim =
-                  do
-                    with vao $ glDeleteVertexArrays 1
-                    SV.unsafeWith vbo $ glDeleteBuffers (fromIntegral nBuf)
-
-            drawPrim <- case midcs
+        let (idcBuf, drawPrim_) = case midcs
               of
                 Nothing -> undefined
-{-                    makeMultiMappedPrim Triangles ElementArray (V.length posP) [
-                        vertexV3f 0 posP (ptrOfs pos),
-                        vertexV3f 1 normP (ptrOfs norm)
-                      ]
--}
                 Just idcs ->
-                  do
                     let (idxT, eleSiz) = case accessorComponentType idcs
                           of
                             J.Number 5121 -> (GL_UNSIGNED_BYTE, 1)
                             J.Number 5123 -> (GL_UNSIGNED_SHORT, 2)
                             J.Number 5125 -> (GL_UNSIGNED_INT, 4)
                             x -> error $ show x
-                        idxCount = fromIntegral $ accessorCount idcs
-                    glBindBuffer GL_ELEMENT_ARRAY_BUFFER $ vbo V.! 3
-                    withAcc gltf idcs bin $ \v ->
-                        glBufferData GL_ELEMENT_ARRAY_BUFFER (idxCount * eleSiz) v GL_STATIC_DRAW
-                
-                    return $
+                      in
+                        ([idcBuf_elem idcs eleSiz], drawPrim_elem idcs idxT eleSiz)
+
+        let vboSrc = [ \vbo i ->
+              do
+                glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
+                glVertexAttribPointer 0 3 GL_FLOAT GL_FALSE 0 nullPtr
+                glEnableVertexAttribArray 0
+                withAcc gltf pos bin $ \v ->
+                    glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount pos)) v GL_STATIC_DRAW
+              ] ++ (case mUv
+                  of
+                    Just uv -> [ \vbo i ->
                       do
-                        glBindVertexArray vao
-                        setUniform4FV locDiffuse baseColorFactor
-                        glUniform1f locLamFactor $ metallic
-                        glUniform1f locNlamFactor $ roughness
-                        glBindTexture GL_TEXTURE_2D $ fromMaybe 0 registeredTx
-                        glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
-            return MappedPrim{..}
+                        glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
+                        glVertexAttribPointer 1 2 GL_FLOAT GL_FALSE 0 nullPtr
+                        glEnableVertexAttribArray 1
+                        withAcc gltf uv bin $ \v ->
+                            glBufferData GL_ARRAY_BUFFER (2 * 4 * fromIntegral (accessorCount uv)) v GL_STATIC_DRAW
+                      ]
+                    Nothing -> []
+              ) ++ [ \vbo i ->
+              do
+                glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
+                glVertexAttribPointer 2 3 GL_FLOAT GL_FALSE 0 nullPtr
+                glEnableVertexAttribArray 2
+                withAcc gltf norm bin $ \v ->
+                    glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount norm)) v GL_STATIC_DRAW
+              ] ++ idcBuf
+                
+        let nBuf = length vboSrc
+        (vao, vbo) <- liftIO $
+          do
+            vao <- overPtr $ glGenVertexArrays 1
+            glBindVertexArray vao
+            vboM <- SMV.unsafeNew nBuf
+            SMV.unsafeWith vboM $ glGenBuffers (fromIntegral nBuf)
+            vbo <- SV.unsafeFreeze vboM
+            forM_ (zip vboSrc [0..]) $ \(f, i) -> f vbo i
+            return (vao, vbo)
+    
+        let drawPrim = 
+                drawPrim_ vao
+    
+            releasePrim =
+              do
+                with vao $ glDeleteVertexArrays 1
+                SV.unsafeWith vbo $ glDeleteBuffers (fromIntegral nBuf)
+
+        return MappedPrim{..}
 
     loadAndRegisterTexture :: IORef TxMap -> Texture -> MRShaderT m (Maybe GLuint)
     loadAndRegisterTexture refTM tx = warnOnException $
