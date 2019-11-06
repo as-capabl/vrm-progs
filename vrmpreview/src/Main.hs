@@ -307,32 +307,13 @@ mapToGL gltf bin scene =
                       in
                         ([idcBuf_elem idcs eleSiz], drawPrim_elem idcs idxT eleSiz)
 
-        let vboSrc = [ \vbo i ->
-              do
-                glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
-                glVertexAttribPointer 0 3 GL_FLOAT GL_FALSE 0 nullPtr
-                glEnableVertexAttribArray 0
-                withAcc gltf pos bin $ \v ->
-                    glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount pos)) v GL_STATIC_DRAW
-              ] ++ (case mUv
+        let vboSrc = [bufferDataByAccessorF gltf bin 0 3 pos]
+                ++ (case mUv
                   of
-                    Just uv -> [ \vbo i ->
-                      do
-                        glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
-                        glVertexAttribPointer 1 2 GL_FLOAT GL_FALSE 0 nullPtr
-                        glEnableVertexAttribArray 1
-                        withAcc gltf uv bin $ \v ->
-                            glBufferData GL_ARRAY_BUFFER (2 * 4 * fromIntegral (accessorCount uv)) v GL_STATIC_DRAW
-                      ]
-                    Nothing -> []
-              ) ++ [ \vbo i ->
-              do
-                glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
-                glVertexAttribPointer 2 3 GL_FLOAT GL_FALSE 0 nullPtr
-                glEnableVertexAttribArray 2
-                withAcc gltf norm bin $ \v ->
-                    glBufferData GL_ARRAY_BUFFER (3 * 4 * fromIntegral (accessorCount norm)) v GL_STATIC_DRAW
-              ] ++ idcBuf
+                    Just uv -> [ bufferDataByAccessorF gltf bin 1 2 uv ]
+                    Nothing -> [])
+                ++ [bufferDataByAccessorF gltf bin 2 3 norm]
+                ++ idcBuf
                 
         let nBuf = length vboSrc
         (vao, vbo) <- liftIO $
@@ -392,7 +373,16 @@ mapToGL gltf bin scene =
                 logInfo $ displayShow smp
                 idx <- registerTextures smp (V2 w h) [(V2 0 0, rgba8)]
                 return idx
-                        
+
+bufferDataByAccessorF gltf bin nAttr nEle acc vbo i =
+  do
+    glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
+    glVertexAttribPointer nAttr nEle GL_FLOAT GL_FALSE 0 nullPtr
+    glEnableVertexAttribArray nAttr
+    withAcc gltf acc bin $ \v ->
+        glBufferData GL_ARRAY_BUFFER (fromIntegral $ fromIntegral nEle * 4 * accessorCount acc) v GL_STATIC_DRAW
+                    
+
 warnOnException ::
     (MonadIO m, HasLogFunc env, MonadReader env m, HasCallStack) =>
     ExceptT Utf8Builder m a -> m (Maybe a)
