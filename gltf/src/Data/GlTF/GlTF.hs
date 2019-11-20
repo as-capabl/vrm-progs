@@ -13,6 +13,7 @@ import qualified Conjct
 import qualified Data.Text as T
 import qualified Data.Aeson as J
 import Data.Int
+import Data.Word
 import Control.Monad.IO.Class (liftIO)
 import System.Environment (getEnv)
 import Language.Haskell.TH
@@ -27,6 +28,13 @@ do
                       do
                         nMem <- maybe (fail "memberName") return $ Conjct.memberNameDefault fn mn
                         return $ Conjct.mkFieldInfo nMem (ConT ''Maybe `AppT` ConT ''Int32) mn '(J..:)
+                    | otherwise -> Nothing
+            | fn == "accessor.schema.json" =
+                if
+                    | mn == "componentType" -> Just $ 
+                    do
+                      nMem <- maybe (fail "memberName") return $ Conjct.memberNameDefault fn mn
+                      return $ Conjct.mkFieldInfo nMem (ConT ''Word32) mn '(J..:)
                     | otherwise -> Nothing
             | otherwise = Nothing
         onType_custom _ o =

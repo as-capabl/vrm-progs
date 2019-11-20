@@ -277,16 +277,20 @@ mapToGL gltf bin scene =
         locNlamFactor <- lift $ locationNlamFactor <$> MRShaderT ask
         registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTx
 
-        let idcBuf_elem idcs eleSiz vbo i =
+        let idcBuf_elem idcs vbo i =
               do
-                let idxCount = fromIntegral $ accessorCount idcs
+                let idxT = accessorComponentType idcs
+                    eleSiz = sizeOfGLType idxT
+                    idxCount = fromIntegral $ accessorCount idcs
                 glBindBuffer GL_ELEMENT_ARRAY_BUFFER $ vbo V.! i
                 withAcc gltf idcs bin $ \v ->
                     glBufferData GL_ELEMENT_ARRAY_BUFFER (idxCount * eleSiz) v GL_STATIC_DRAW
                 
-        let drawPrim_elem idcs idxT eleSiz vao =
+        let drawPrim_elem idcs vao =
               do
-                let idxCount = fromIntegral $ accessorCount idcs
+                let idxT = accessorComponentType idcs
+                    eleSiz = sizeOfGLType idxT
+                    idxCount = fromIntegral $ accessorCount idcs
                 glBindVertexArray vao
                 setUniform4FV locDiffuse baseColorFactor
                 glUniform1f locLamFactor $ metallic
@@ -297,15 +301,7 @@ mapToGL gltf bin scene =
         let (idcBuf, drawPrim_) = case midcs
               of
                 Nothing -> undefined
-                Just idcs ->
-                    let (idxT, eleSiz) = case accessorComponentType idcs
-                          of
-                            J.Number 5121 -> (GL_UNSIGNED_BYTE, 1)
-                            J.Number 5123 -> (GL_UNSIGNED_SHORT, 2)
-                            J.Number 5125 -> (GL_UNSIGNED_INT, 4)
-                            x -> error $ show x
-                      in
-                        ([idcBuf_elem idcs eleSiz], drawPrim_elem idcs idxT eleSiz)
+                Just idcs -> ([idcBuf_elem idcs], drawPrim_elem idcs)
 
         let vboSrc = [bufferDataByAccessorF gltf bin 0 3 pos]
                 ++ (case mUv
@@ -373,6 +369,12 @@ mapToGL gltf bin scene =
                 logInfo $ displayShow smp
                 idx <- registerTextures smp (V2 w h) [(V2 0 0, rgba8)]
                 return idx
+
+
+sizeOfGLType GL_UNSIGNED_BYTE = 1
+sizeOfGLType GL_UNSIGNED_SHORT = 2
+sizeOfGLType GL_UNSIGNED_INT = 4
+sizeOfGLType x = error $ "sizeOfGLType " ++ show x
 
 bufferDataByAccessorF gltf bin nAttr nEle acc vbo i =
   do
