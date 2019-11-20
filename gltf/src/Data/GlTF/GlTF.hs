@@ -16,12 +16,10 @@ import Data.Int
 import Control.Monad.IO.Class (liftIO)
 import System.Environment (getEnv)
 import Language.Haskell.TH
+import TH.RelativePaths
 
 do
-    scRoot <- liftIO $ getEnv "HSGLTF_SCHEMA_ROOT"
-    if null scRoot
-        then fail "Set HSGLTF_SCHEMA_ROOT environment variable"
-        else return ()
+    scRoot <- pathRelativeToCabalPackage "schema"
     let onMember_custom _ fn mn _ _
             | fn == "sampler.schema.json" =
                 if
