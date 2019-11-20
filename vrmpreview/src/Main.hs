@@ -303,12 +303,12 @@ mapToGL gltf bin scene =
                 Nothing -> undefined
                 Just idcs -> ([idcBuf_elem idcs], drawPrim_elem idcs)
 
-        let vboSrc = [bufferDataByAccessorF gltf bin 0 3 pos]
+        let vboSrc = [bufferDataByAccessor gltf bin 0 3 pos]
                 ++ (case mUv
                   of
-                    Just uv -> [ bufferDataByAccessorF gltf bin 1 2 uv ]
+                    Just uv -> [bufferDataByAccessor gltf bin 1 2 uv]
                     Nothing -> [])
-                ++ [bufferDataByAccessorF gltf bin 2 3 norm]
+                ++ [bufferDataByAccessor gltf bin 2 3 norm]
                 ++ idcBuf
                 
         let nBuf = length vboSrc
@@ -376,13 +376,13 @@ sizeOfGLType GL_UNSIGNED_SHORT = 2
 sizeOfGLType GL_UNSIGNED_INT = 4
 sizeOfGLType x = error $ "sizeOfGLType " ++ show x
 
-bufferDataByAccessorF gltf bin nAttr nEle acc vbo i =
+bufferDataByAccessor gltf bin nAttr nEle acc@Accessor{..} vbo i =
   do
     glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
-    glVertexAttribPointer nAttr nEle GL_FLOAT GL_FALSE 0 nullPtr
+    glVertexAttribPointer nAttr nEle accessorComponentType GL_FALSE 0 nullPtr
     glEnableVertexAttribArray nAttr
     withAcc gltf acc bin $ \v ->
-        glBufferData GL_ARRAY_BUFFER (fromIntegral $ fromIntegral nEle * 4 * accessorCount acc) v GL_STATIC_DRAW
+        glBufferData GL_ARRAY_BUFFER (fromIntegral $ fromIntegral nEle * 4 * accessorCount) v GL_STATIC_DRAW
                     
 
 warnOnException ::
