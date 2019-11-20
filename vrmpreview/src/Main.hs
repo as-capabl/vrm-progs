@@ -303,12 +303,12 @@ mapToGL gltf bin scene =
                 Nothing -> undefined
                 Just idcs -> ([idcBuf_elem idcs], drawPrim_elem idcs)
 
-        let vboSrc = [bufferDataByAccessor gltf bin 0 3 pos]
+        let vboSrc = [bufferDataByAccessor gltf bin 0 pos]
                 ++ (case mUv
                   of
-                    Just uv -> [bufferDataByAccessor gltf bin 1 2 uv]
+                    Just uv -> [bufferDataByAccessor gltf bin 1 uv]
                     Nothing -> [])
-                ++ [bufferDataByAccessor gltf bin 2 3 norm]
+                ++ [bufferDataByAccessor gltf bin 2 norm]
                 ++ idcBuf
                 
         let nBuf = length vboSrc
@@ -376,8 +376,15 @@ sizeOfGLType GL_UNSIGNED_SHORT = 2
 sizeOfGLType GL_UNSIGNED_INT = 4
 sizeOfGLType x = error $ "sizeOfGLType " ++ show x
 
-bufferDataByAccessor gltf bin nAttr nEle acc@Accessor{..} vbo i =
+bufferDataByAccessor gltf bin nAttr acc@Accessor{..} vbo i =
   do
+    let nEle = case accessorType
+          of
+            AccScalar -> 1
+            AccVec2 -> 2
+            AccVec3 -> 3
+            AccVec4 -> 4
+            _ -> error "bufferDataByAccessor"
     glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
     glVertexAttribPointer nAttr nEle accessorComponentType GL_FALSE 0 nullPtr
     glEnableVertexAttribArray nAttr

@@ -19,6 +19,8 @@ import System.Environment (getEnv)
 import Language.Haskell.TH
 import TH.RelativePaths
 
+import Data.GlTF.Prim
+
 do
     scRoot <- pathRelativeToCabalPackage "schema"
     let onMember_custom _ fn mn _ _
@@ -32,9 +34,13 @@ do
             | fn == "accessor.schema.json" =
                 if
                     | mn == "componentType" -> Just $ 
-                    do
-                      nMem <- maybe (fail "memberName") return $ Conjct.memberNameDefault fn mn
-                      return $ Conjct.mkFieldInfo nMem (ConT ''Word32) mn '(J..:)
+                      do
+                        nMem <- maybe (fail "memberName") return $ Conjct.memberNameDefault fn mn
+                        return $ Conjct.mkFieldInfo nMem (ConT ''Word32) mn '(J..:)
+                    | mn == "type" -> Just $
+                      do
+                        nMem <- maybe (fail "memberName") return $ Conjct.memberNameDefault fn mn
+                        return $ Conjct.mkFieldInfo nMem (ConT ''AccType) mn '(J..:)
                     | otherwise -> Nothing
             | otherwise = Nothing
         onType_custom _ o =

@@ -19,6 +19,7 @@ extra-source-files:  CHANGELOG.md
 
 library
   exposed-modules:  Data.GlTF
+                  , Data.GlTF.Prim
                   , Data.GlTF.GlTF
                   , Data.GlTF.Read
   -- other-extensions:
