@@ -277,15 +277,6 @@ mapToGL gltf bin scene =
         locNlamFactor <- lift $ locationNlamFactor <$> MRShaderT ask
         registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTx
 
-        let idcBuf_elem idcs vbo i =
-              do
-                let idxT = accessorComponentType idcs
-                    eleSiz = sizeOfGLType idxT
-                    idxCount = fromIntegral $ accessorCount idcs
-                glBindBuffer GL_ELEMENT_ARRAY_BUFFER $ vbo V.! i
-                withAcc gltf idcs bin $ \v ->
-                    glBufferData GL_ELEMENT_ARRAY_BUFFER (idxCount * eleSiz) v GL_STATIC_DRAW
-                
         let drawPrim_elem idcs vao =
               do
                 let idxT = accessorComponentType idcs
@@ -301,14 +292,15 @@ mapToGL gltf bin scene =
         let (idcBuf, drawPrim_) = case midcs
               of
                 Nothing -> undefined
-                Just idcs -> ([idcBuf_elem idcs], drawPrim_elem idcs)
+                Just idcs ->
+                    ([bufferDataByAccessor gltf bin ElementArrayBuffer idcs], drawPrim_elem idcs)
 
-        let vboSrc = [bufferDataByAccessor gltf bin 0 pos]
+        let vboSrc = [bufferDataByAccessor gltf bin (ArrayBuffer 0) pos]
                 ++ (case mUv
                   of
-                    Just uv -> [bufferDataByAccessor gltf bin 1 uv]
+                    Just uv -> [bufferDataByAccessor gltf bin (ArrayBuffer 1) uv]
                     Nothing -> [])
-                ++ [bufferDataByAccessor gltf bin 2 norm]
+                ++ [bufferDataByAccessor gltf bin (ArrayBuffer 2) norm]
                 ++ idcBuf
                 
         let nBuf = length vboSrc
@@ -374,22 +366,35 @@ mapToGL gltf bin scene =
 sizeOfGLType GL_UNSIGNED_BYTE = 1
 sizeOfGLType GL_UNSIGNED_SHORT = 2
 sizeOfGLType GL_UNSIGNED_INT = 4
+sizeOfGLType GL_FLOAT = 4
 sizeOfGLType x = error $ "sizeOfGLType " ++ show x
 
-bufferDataByAccessor gltf bin nAttr acc@Accessor{..} vbo i =
+data TargetBuffer = ArrayBuffer GLuint | ElementArrayBuffer
+
+bufferDataByAccessor gltf bin tgt acc@Accessor{..} vbo i =
   do
-    let nEle = case accessorType
-          of
-            AccScalar -> 1
-            AccVec2 -> 2
-            AccVec3 -> 3
-            AccVec4 -> 4
-            _ -> error "bufferDataByAccessor"
-    glBindBuffer GL_ARRAY_BUFFER $ vbo V.! i
-    glVertexAttribPointer nAttr nEle accessorComponentType GL_FALSE 0 nullPtr
-    glEnableVertexAttribArray nAttr
+    glBindBuffer bufKind $ vbo V.! i
+    bufSet
     withAcc gltf acc bin $ \v ->
-        glBufferData GL_ARRAY_BUFFER (fromIntegral $ fromIntegral nEle * 4 * accessorCount) v GL_STATIC_DRAW
+        glBufferData bufKind (fromIntegral $ fromIntegral nEle * eleSiz * accessorCount) v GL_STATIC_DRAW
+  where
+    nEle = case accessorType
+      of
+        AccScalar -> 1
+        AccVec2 -> 2
+        AccVec3 -> 3
+        AccVec4 -> 4
+        _ -> error "bufferDataByAccessor"
+    eleSiz = sizeOfGLType accessorComponentType
+    (bufKind, bufSet) = case tgt
+      of
+        ArrayBuffer nAttr -> (GL_ARRAY_BUFFER, bufSetArray nAttr)
+        ElementArrayBuffer -> (GL_ELEMENT_ARRAY_BUFFER, return ())
+    bufSetArray nAttr =
+      do
+        glVertexAttribPointer nAttr nEle accessorComponentType GL_FALSE 0 nullPtr
+        glEnableVertexAttribArray nAttr
+    
                     
 
 warnOnException ::
