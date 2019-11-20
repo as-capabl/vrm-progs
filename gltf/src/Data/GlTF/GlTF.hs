@@ -9,7 +9,7 @@ module
     Data.GlTF.GlTF
 where
 
-import Conjct
+import qualified Conjct
 import qualified Data.Text as T
 import qualified Data.Aeson as J
 import Data.Int
@@ -29,11 +29,17 @@ do
                         return $ Conjct.mkFieldInfo nMem (ConT ''Maybe `AppT` ConT ''Int32) mn '(J..:)
                     | otherwise -> Nothing
             | otherwise = Nothing
+        onType_custom _ o =
+          do
+            Conjct.checkType o "number"
+            return $ return $ ConT ''Float
 
         stgDef = Conjct.defaultSchemaSetting (T.pack scRoot)
-        onM = onMember_custom : onMember stgDef
+        onM = onMember_custom : Conjct.onMember stgDef
+        onT = onType_custom : Conjct.onType stgDef
         stg = stgDef {
-            onMember = onM
+            Conjct.onMember = onM,
+            Conjct.onType = onT
           }
     Conjct.fromSchema
         stg

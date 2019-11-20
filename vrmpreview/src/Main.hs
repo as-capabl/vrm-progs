@@ -255,14 +255,14 @@ mapToGL gltf bin scene =
             baseColorFactor = fromMaybe (V4 1.0 1.0 1.0 1.0) $
               do
                 m <- materialPbr
-                listToV4 $ realToFrac <$>materialPbrMetallicRoughnessBaseColorFactor m
+                listToV4 $ materialPbrMetallicRoughnessBaseColorFactor m
             baseColorTx =
               do
                 m <- materialPbr
                 txInfo <- materialPbrMetallicRoughnessBaseColorTexture m
                 glTFTextures gltf !? textureInfoIndex txInfo
-            metallic = realToFrac $ fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessMetallicFactor
-            roughness = realToFrac $ fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessRoughnessFactor
+            metallic = fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessMetallicFactor
+            roughness = fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessRoughnessFactor
             
         -- logInfo (displayShow material)
         let attrs = meshPrimitiveAttributes p
@@ -429,8 +429,8 @@ calcBBox gltf scene =
       do
         accId <- HM.lookup "POSITION" $ meshPrimitiveAttributes pm
         acc <- glTFAccessors gltf !? fromIntegral accId
-        minimum <- listToV3 $ realToFrac <$> accessorMin acc
-        maximum <- listToV3 $ realToFrac <$> accessorMax acc
+        minimum <- listToV3 $ accessorMin acc
+        maximum <- listToV3 $ accessorMax acc
         return $ BoxUnion (Box minimum maximum)
         
 
