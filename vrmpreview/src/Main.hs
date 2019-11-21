@@ -98,7 +98,7 @@ main =
     (gltf, bin) <- liftIO (readGlb fname) >>= \case
         Left err -> die err
         Right x -> return x
-    
+
     scIx <- maybe (die "No default scene\n") return $
         glTFScene gltf
 
@@ -116,7 +116,7 @@ main =
         BS.putStr ","
         case J.fromJSON $ accessorComponentType acc
             of
-              J.Success i -> BS.putStr $ dispEType i 
+              J.Success i -> BS.putStr $ dispEType i
               J.Error err -> BS.putStr $ "Error:" <> fromString err
         BS.putStr "\n"
     -}
@@ -124,11 +124,11 @@ main =
     let bbox = calcBBox gltf scene
 
     logOpt <- logOptionsHandle stderr False
-    withHolz $ withLogFunc logOpt $ \logFunc -> runRIO logFunc $ 
+    withHolz $ withLogFunc logOpt $ \logFunc -> runRIO logFunc $
       do
         w <- liftIO $ openWindow Windowed (Box (V2 0 0) canvasSize)
         logInfo $ displayShow bbox
-        
+
         shader <- makeVRMShader
         -- let prog = shaderProg shader
         -- ambient <- getUniform prog "ambient"
@@ -169,7 +169,7 @@ initView =
     locSight <- askMRShader locationSight
     liftIO $ with sight $ \p ->
         glUniform3fv locSight 1 (castPtr p)
-    
+
 
 initTrans :: Box V3 Float -> M44 Float
 initTrans bbox = mkTransformationMat (fromDiag33 r r r) (V3 0.0 vOff 0.0)
@@ -263,7 +263,7 @@ mapToGL gltf bin scene =
                 glTFTextures gltf !? textureInfoIndex txInfo
             metallic = fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessMetallicFactor
             roughness = fromMaybe 0 $ materialPbr >>= materialPbrMetallicRoughnessRoughnessFactor
-            
+
         -- logInfo (displayShow material)
         let attrs = meshPrimitiveAttributes p
             mUv = HM.lookup "TEXCOORD_0" attrs >>= (glTFAccessors gltf !?)
@@ -302,7 +302,7 @@ mapToGL gltf bin scene =
                     Nothing -> [])
                 ++ [bufferDataByAccessor gltf bin (ArrayBuffer 2) norm]
                 ++ idcBuf
-                
+
         let nBuf = length vboSrc
         (vao, vbo) <- liftIO $
           do
@@ -313,10 +313,10 @@ mapToGL gltf bin scene =
             vbo <- SV.unsafeFreeze vboM
             forM_ (zip vboSrc [0..]) $ \(f, i) -> f vbo i
             return (vao, vbo)
-    
-        let drawPrim = 
+
+        let drawPrim =
                 drawPrim_ vao
-    
+
             releasePrim =
               do
                 with vao $ glDeleteVertexArrays 1
@@ -392,10 +392,14 @@ bufferDataByAccessor gltf bin tgt acc@Accessor{..} vbo i =
         ElementArrayBuffer -> (GL_ELEMENT_ARRAY_BUFFER, return ())
     bufSetArray nAttr =
       do
-        glVertexAttribPointer nAttr nEle accessorComponentType GL_FALSE 0 nullPtr
+        let nm = case accessorNormalized
+                   of
+                     Just True -> GL_TRUE
+                     _ -> GL_FALSE
+        glVertexAttribPointer nAttr nEle accessorComponentType nm 0 nullPtr
         glEnableVertexAttribArray nAttr
-    
-                    
+
+
 
 warnOnException ::
     (MonadIO m, HasLogFunc env, MonadReader env m, HasCallStack) =>
@@ -446,7 +450,7 @@ calcBBox gltf scene =
         minimum <- listToV3 $ accessorMin acc
         maximum <- listToV3 $ accessorMax acc
         return $ BoxUnion (Box minimum maximum)
-        
+
 
 drawScene :: MonadHolz m => GlTF -> MeshMap -> Scene -> MRShaderT m ()
 drawScene gltf mm scene = mapM_ drawNode $ sceneNodes scene
@@ -553,7 +557,7 @@ fragmentShaderSource = [r|
 
         vec4 baseColor = texture(tex, texUV) * color * baseColorFactor;
         vec4 dfColor = mix(baseColor * (1 - dielectricSpecular[0]), black, lamFactor);
-        vec4 spColor = mix(dielectricSpecular, baseColor, lamFactor); 
+        vec4 spColor = mix(dielectricSpecular, baseColor, lamFactor);
 
         float lamValue = dot(nnorm, planeDir);
         float spValue = dot(nnorm, h);
