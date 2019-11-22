@@ -66,6 +66,7 @@ newtype MRShaderT m a = MRShaderT {
 instance MonadReader r m => MonadReader r (MRShaderT m)
   where
     ask = lift ask
+    local f (MRShaderT (ReaderT fmx)) = MRShaderT $ ReaderT $ \vrm -> local f (fmx vrm)
 
 runMRShaderT :: MonadIO m => MRShader -> MRShaderT m a -> m a
 runMRShaderT shader action =
@@ -503,6 +504,7 @@ makeVRMShader = liftIO $
     locationPlaneDir <- getUniform shaderProg "planeDir"
     locationLamFactor <- getUniform shaderProg "lamFactor"
     locationNlamFactor <- getUniform shaderProg "nlamFactor"
+    locationMetallic <- getUniform shaderProg "metallic"
 
     with (V4 1 1 1 1 :: V4 Float) $ \ptr -> do
         glUniform4fv locationBaseColorFactor 1 (castPtr ptr)
@@ -545,6 +547,7 @@ fragmentShaderSource = [r|
     in vec3 normal;
     in vec4 viewPos;
     in vec4 color;
+    in float metallic;
     uniform sampler2D tex;
     uniform vec4 baseColorFactor;
     uniform vec3 planeDir;
