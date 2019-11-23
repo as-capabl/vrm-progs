@@ -23,6 +23,7 @@ import qualified RIO.Text as T
 import qualified RIO.ByteString as BS
 import qualified Data.ByteString.Unsafe as BS
 import qualified Data.Vector.Generic as V
+import qualified Data.Vector.Mutable as BMV
 import qualified Data.Vector.Storable.Mutable as SMV
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Cont
@@ -85,9 +86,11 @@ data MappedPrim = MappedPrim {
     drawPrim :: IO ()
   }
 
-type MeshMap = IntMap (Vector MappedPrim)
+type MeshMap = Vector (Vector MappedPrim)
 
 type TxMap = IntMap GLuint
+
+-- data DrawState =
 
 canvasSize :: V2 Float
 canvasSize = V2 640 960
@@ -225,10 +228,10 @@ mapToGL ::
     GlTF -> BinChunk -> Scene -> MRShaderT m (MeshMap, TxMap)
 mapToGL gltf bin scene =
   do
-    refMM <- newIORef IM.empty
+    refMM <- liftIO $ BMV.unsafeNew (V.length $ glTFMeshes gltf)
     refTM <- newIORef IM.empty
     mapM_ (loadNode refMM refTM) $ sceneNodes scene
-    (,) <$> readIORef refMM <*> readIORef refTM
+    (,) <$> liftIO (V.unsafeFreeze refMM) <*> readIORef refTM
   where
     loadNode refMM refTM nodeId =
       do
@@ -245,8 +248,7 @@ mapToGL gltf bin scene =
       do
         let prims = meshPrimitives msh
         mvbs <- mapM (loadPrim refTM) (V.toList prims)
-        modifyIORef' refMM $
-            IM.insert mshId (BV.fromListN (V.length prims) $ catMaybes mvbs)
+        liftIO $ BMV.write refMM mshId (BV.fromListN (V.length prims) $ catMaybes mvbs)
 
     loadPrim :: IORef TxMap -> MeshPrimitive -> MRShaderT m (Maybe MappedPrim)
     loadPrim refTM p = runMaybeT $
@@ -464,7 +466,7 @@ drawScene gltf mm scene = mapM_ drawNode $ sceneNodes scene
         runMaybeT $
           do
             mshId <- MaybeT $ return $ nodeMesh nd
-            mshVAOs <- MaybeT $ return $ IM.lookup mshId mm
+            mshVAOs <- MaybeT $ return $ mm !? mshId
             drawMesh mshVAOs
         mapM_ drawNode $ nodeChildren nd
 
