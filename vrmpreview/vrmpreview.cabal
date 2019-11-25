@@ -36,6 +36,7 @@ executable vrmpreview
                      , JuicyPixels
                      , boundingboxes
                      , raw-strings-qq
+                     , derive-storable
   hs-source-dirs:      src
   default-language:    Haskell2010
   default-extensions:  NoImplicitPrelude

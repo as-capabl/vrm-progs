@@ -7,6 +7,8 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -44,6 +46,7 @@ import Foreign.Marshal.Array (allocaArray)
 import Foreign.Marshal.Utils (with)
 import Foreign.C.String
 import Foreign.Storable
+import Foreign.Storable.Generic
 import qualified Codec.Picture as Jp
 import Text.RawString.QQ (r)
 
@@ -89,6 +92,7 @@ data MappedPrim = MappedPrim {
 type MeshMap = Vector (Vector MappedPrim)
 
 type TxMap = IntMap GLuint
+
 
 -- data DrawState =
 
@@ -228,7 +232,7 @@ mapToGL ::
     GlTF -> BinChunk -> Scene -> MRShaderT m (MeshMap, TxMap)
 mapToGL gltf bin scene =
   do
-    refMM <- liftIO $ BMV.unsafeNew (V.length $ glTFMeshes gltf)
+    refMM <- liftIO $ BMV.replicate (V.length $ glTFNodes gltf) (V.empty)
     refTM <- newIORef IM.empty
     mapM_ (loadNode refMM refTM) $ sceneNodes scene
     (,) <$> liftIO (V.unsafeFreeze refMM) <*> readIORef refTM
@@ -241,14 +245,14 @@ mapToGL gltf bin scene =
           do
             mshId <- MaybeT $ return $ nodeMesh nd
             msh <- MaybeT $ return $ glTFMeshes gltf !? fromIntegral mshId
-            lift $ loadMesh refMM refTM mshId msh
+            mvbs <- lift $ loadMesh refTM mshId msh
+            liftIO $ BMV.write refMM nodeId (BV.fromList $ catMaybes mvbs)
         mapM_ (loadNode refMM refTM) $ nodeChildren nd
 
-    loadMesh refMM refTM mshId msh =
+    loadMesh refTM mshId msh =
       do
         let prims = meshPrimitives msh
-        mvbs <- mapM (loadPrim refTM) (V.toList prims)
-        liftIO $ BMV.write refMM mshId (BV.fromListN (V.length prims) $ catMaybes mvbs)
+        mapM (loadPrim refTM) (V.toList prims)
 
     loadPrim :: IORef TxMap -> MeshPrimitive -> MRShaderT m (Maybe MappedPrim)
     loadPrim refTM p = runMaybeT $
@@ -465,14 +469,64 @@ drawScene gltf mm scene = mapM_ drawNode $ sceneNodes scene
             glTFNodes gltf !? fromIntegral nodeId
         runMaybeT $
           do
-            mshId <- MaybeT $ return $ nodeMesh nd
-            mshVAOs <- MaybeT $ return $ mm !? mshId
-            drawMesh mshVAOs
+            prims <- MaybeT $ return $ mm !? nodeId
+            V.forM_ prims $ \prim ->
+                liftIO $ drawPrim prim
         mapM_ drawNode $ nodeChildren nd
 
-    drawMesh mshVAOs = V.forM_ mshVAOs $ \vao ->
-        liftIO $ drawPrim vao
+--
+-- Animation
+--
+{-
+data LiveAnimationChannel a = LiveAnimationChannel
+  {
+    lacValid :: Bool,
+    lacInput :: Ptr Float,
+    lacOutput :: Ptr (),
+    lacOutputConv :: Ptr () -> IO a,
+    lacCurrentTime :: Float,
+    lacCurrentIndex :: Int
+  }
 
+data LiveAnimation = LiveAnimation
+  {
+    laTranslation :: LiveAnimationChannel (V3 Float),
+    laTranslation :: LiveAnimationChannel (V4 Float),
+    laScale :: LiveAnimationChannel (V3 Float)
+  }
+-}
+
+data AniChanState = AniChanState
+  {
+    acsCurrentTime :: Float,
+    acsCurrentIndex :: Int
+  }
+  deriving (Eq, Show, Generic)
+
+instance GStorable AniChanState
+
+data AniState = AniState
+  {
+    asSpatialAni :: Vector (Maybe (AnimationChannel, AnimationSampler)),
+    asSpatialState :: SMV.IOVector AniChanState
+  }
+
+type NodeAniState = Vector AniState
+
+initAniState :: MonadIO m => GlTF -> BinChunk -> Animation -> m NodeAniState
+initAniState gltf bin Animation{..} = liftIO $
+  do
+    mv <- BMV.replicateM (V.length $ glTFNodes gltf) newAniState
+    V.unsafeFreeze mv
+  where
+    newAniState =
+      do
+        cs <- SMV.replicate 3 (AniChanState 0 0)
+        return $ AniState (V.replicate 3 Nothing) cs
+
+--
+-- Shader
+--
 makeVRMShader :: MonadIO m => m MRShader
 makeVRMShader = liftIO $
   do
