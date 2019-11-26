@@ -524,6 +524,43 @@ initAniState gltf bin Animation{..} = liftIO $
         cs <- SMV.replicate 3 (AniChanState 0 0)
         return $ AniState (V.replicate 3 Nothing) cs
 
+data Interpolator a = Interpolator
+  {
+    ipSize :: Int,
+    ipRead :: Ptr () -> IO a,
+    ipDefault :: a,
+    ipLinear :: (Float, a) -> (Float, a) -> a
+  }
+
+ipScale :: Interpolator Float
+ipScale = undefined
+
+ipRotate :: Interpolator (Quaternion Float)
+ipRotate = undefined
+
+ipTrans :: Interpolator (V3 Float)
+ipTrans = undefined
+
+tickAniState :: MonadIO m => GlTF -> BinChunk -> AniState -> Float -> m (M44 Float)
+tickAniState gltf bin AniState{..} delta = liftIO $
+  do
+    s <- doTick 0 ipScale
+    r <- doTick 1 ipRotate
+    t <- doTick 2 ipTrans
+    return $  mkTransformationMat (fromQuaternion r !!* s) t
+  where
+    doTick :: Int -> Interpolator a -> IO a
+    doTick i ip = doTickImpl (asSpatialAni V.! i) i ip
+
+    doTickImpl ::
+        Maybe (AnimationChannel, AnimationSampler) -> Int -> Interpolator a -> IO a
+    doTickImpl (Just (chan, smp)) i ip =
+      do
+        AniChanState {..} <- SMV.read asSpatialState i
+        return $ ipDefault ip
+    doTickImpl Nothing _ ip =
+        return $ ipDefault ip
+
 --
 -- Shader
 --
