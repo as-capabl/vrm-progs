@@ -507,7 +507,7 @@ instance GStorable AniChanState
 
 data AniState = AniState
   {
-    asSpatialAni :: Vector (Maybe (AnimationChannel, AnimationSampler)),
+    asSpatialAni :: Vector (Maybe (AnimationChannel, AnimationSampler, Accessor, Accessor)),
     asSpatialState :: SMV.IOVector AniChanState
   }
 
@@ -527,19 +527,49 @@ initAniState gltf bin Animation{..} = liftIO $
 data Interpolator a = Interpolator
   {
     ipSize :: Int,
-    ipRead :: Ptr () -> IO a,
+    ipRead :: Ptr () -> Int -> IO a,
     ipDefault :: a,
-    ipLinear :: (Float, a) -> (Float, a) -> a
+    ipLinear :: (Float, a) -> (Float, a) -> Float -> a
   }
 
+linearInterpolation :: (Num a, Fractional a) => (Float, a) -> (Float, a) -> Float -> a
+linearInterpolation (t1, x1) (t2, x2) t
+    | delta > dmin = x1 + (x2 - x1) * realToFrac ((t - t1) / delta)
+    | otherwise = (x1 + x2) / 2
+  where
+    delta = t2 - t1
+    dmin = 0.00000001
+
 ipScale :: Interpolator Float
-ipScale = undefined
+ipScale = Interpolator {..}
+  where
+    ipSize = sizeOf (undefined :: Float)
+    ipRead p i = peekElemOff (castPtr p) i
+    ipDefault = 1
+    ipLinear = linearInterpolation
 
 ipRotate :: Interpolator (Quaternion Float)
-ipRotate = undefined
+ipRotate = Interpolator {..}
+  where
+    ipSize = sizeOf (undefined :: Float) * 4
+    ipRead p0 i =
+      do
+        let p = castPtr @Float p
+        x <- peekElemOff p (4 * i)
+        y <- peekElemOff p (4 * i + 1)
+        z <- peekElemOff p (4 * i + 2)
+        w <- peekElemOff p (4 * i + 3)
+        return $ Quaternion w (V3 x y z)
+    ipDefault = 1
+    ipLinear = linearInterpolation
 
 ipTrans :: Interpolator (V3 Float)
-ipTrans = undefined
+ipTrans = Interpolator {..}
+  where
+    ipSize = sizeOf (undefined :: V3 Float)
+    ipRead p i = peekElemOff (castPtr p) i
+    ipDefault = V3 0 0 0
+    ipLinear = linearInterpolation
 
 tickAniState :: MonadIO m => GlTF -> BinChunk -> AniState -> Float -> m (M44 Float)
 tickAniState gltf bin AniState{..} delta = liftIO $
@@ -553,11 +583,37 @@ tickAniState gltf bin AniState{..} delta = liftIO $
     doTick i ip = doTickImpl (asSpatialAni V.! i) i ip
 
     doTickImpl ::
-        Maybe (AnimationChannel, AnimationSampler) -> Int -> Interpolator a -> IO a
-    doTickImpl (Just (chan, smp)) i ip =
+        Maybe (AnimationChannel, AnimationSampler, Accessor, Accessor) -> Int -> Interpolator a -> IO a
+    doTickImpl (Just (chan, smp, inAcc, outAcc)) i ip =
       do
         AniChanState {..} <- SMV.read asSpatialState i
-        return $ ipDefault ip
+        let Just tMax = accessorMax inAcc !? 0
+            count = accessorCount inAcc
+            t'0 = acsCurrentTime + delta
+            (t', idx0) = if t'0 < tMax then (t'0, acsCurrentIndex) else (0, 0)
+        (i1, i2) <- withAcc gltf inAcc bin $ \p ->
+            seekIdx (castPtr p) count idx0 t'
+        (t1, t2) <- withAcc gltf inAcc bin $ \p ->
+            (,) <$> peekElemOff (castPtr p) i1 <*> peekElemOff (castPtr p) i2
+        (x1, x2) <- withAcc gltf outAcc bin $ \p ->
+            (,) <$> ipRead ip p i1 <*> ipRead ip p i2
+        SMV.write asSpatialState i (AniChanState t' i1)
+        return $ ipLinear ip (t1, x1) (t2, x2) t'
+      where
+        seekIdx p count idx t
+            | idx == 0 =
+              do
+                t0 <- peekElemOff p 0
+                if t < t0 then return (0, 0) else seekIdx1 p count idx t
+            | otherwise = seekIdx1 p count idx t
+        seekIdx1 p count idx t
+            | idx + 1 < count =
+              do
+                let !idx' = idx + 1
+                t' <- peekElemOff p idx'
+                if t < t' then return (idx, idx') else seekIdx1 p count idx' t
+            | otherwise = return (idx, idx)
+
     doTickImpl Nothing _ ip =
         return $ ipDefault ip
 
