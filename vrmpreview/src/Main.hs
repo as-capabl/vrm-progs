@@ -24,8 +24,10 @@ import qualified Data.Vector.Storable as SV
 import qualified RIO.Text as T
 import qualified RIO.ByteString as BS
 import qualified Data.ByteString.Unsafe as BS
-import qualified Data.Vector.Generic as V
-import qualified Data.Vector.Mutable as BMV
+import qualified RIO.Vector as V
+import qualified RIO.Vector.Unsafe as V
+import qualified RIO.Vector.Partial as V
+import qualified Data.Vector.Generic.Mutable as MV
 import qualified Data.Vector.Storable.Mutable as SMV
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Cont
@@ -232,7 +234,7 @@ mapToGL ::
     GlTF -> BinChunk -> Scene -> MRShaderT m (MeshMap, TxMap)
 mapToGL gltf bin scene =
   do
-    refMM <- liftIO $ BMV.replicate (V.length $ glTFNodes gltf) (V.empty)
+    refMM <- liftIO $ MV.replicate (V.length $ glTFNodes gltf) (V.empty)
     refTM <- newIORef IM.empty
     mapM_ (loadNode refMM refTM) $ sceneNodes scene
     (,) <$> liftIO (V.unsafeFreeze refMM) <*> readIORef refTM
@@ -246,7 +248,7 @@ mapToGL gltf bin scene =
             mshId <- MaybeT $ return $ nodeMesh nd
             msh <- MaybeT $ return $ glTFMeshes gltf !? fromIntegral mshId
             mvbs <- lift $ loadMesh refTM mshId msh
-            liftIO $ BMV.write refMM nodeId (BV.fromList $ catMaybes mvbs)
+            liftIO $ MV.write refMM nodeId (BV.fromList $ catMaybes mvbs)
         mapM_ (loadNode refMM refTM) $ nodeChildren nd
 
     loadMesh refTM mshId msh =
@@ -315,7 +317,7 @@ mapToGL gltf bin scene =
           do
             vao <- overPtr $ glGenVertexArrays 1
             glBindVertexArray vao
-            vboM <- SMV.unsafeNew nBuf
+            vboM <- MV.unsafeNew nBuf
             SMV.unsafeWith vboM $ glGenBuffers (fromIntegral nBuf)
             vbo <- SV.unsafeFreeze vboM
             forM_ (zip vboSrc [0..]) $ \(f, i) -> f vbo i
@@ -513,15 +515,18 @@ data AniState = AniState
 
 type NodeAniState = Vector AniState
 
-initAniState :: MonadIO m => GlTF -> BinChunk -> Animation -> m NodeAniState
-initAniState gltf bin Animation{..} = liftIO $
+initAniState ::
+    (MonadIO m, MonadUnliftIO m, HasLogFunc env, MonadReader env m) =>
+    GlTF -> BinChunk -> Animation -> m NodeAniState
+initAniState gltf bin Animation{..} =
   do
-    mv <- BMV.replicateM (V.length $ glTFNodes gltf) newAniState
-    V.unsafeFreeze mv
+    mv <- withUnliftIO $  \uio ->
+        MV.replicateM (V.length $ glTFNodes gltf) (unliftIO uio newAniState)
+    liftIO $ V.unsafeFreeze mv
   where
     newAniState =
       do
-        cs <- SMV.replicate 3 (AniChanState 0 0)
+        cs <- liftIO $ MV.replicate 3 (AniChanState 0 0)
         return $ AniState (V.replicate 3 Nothing) cs
 
 data Interpolator a = Interpolator
@@ -586,10 +591,11 @@ tickAniState gltf bin AniState{..} delta = liftIO $
         Maybe (AnimationChannel, AnimationSampler, Accessor, Accessor) -> Int -> Interpolator a -> IO a
     doTickImpl (Just (chan, smp, inAcc, outAcc)) i ip =
       do
-        AniChanState {..} <- SMV.read asSpatialState i
+        AniChanState {..} <- MV.read asSpatialState i
         let Just tMax = accessorMax inAcc !? 0
             count = accessorCount inAcc
             t'0 = acsCurrentTime + delta
+            -- TODO: Currently fixed to repeat. Supprot truncation.
             (t', idx0) = if t'0 < tMax then (t'0, acsCurrentIndex) else (0, 0)
         (i1, i2) <- withAcc gltf inAcc bin $ \p ->
             seekIdx (castPtr p) count idx0 t'
@@ -597,7 +603,7 @@ tickAniState gltf bin AniState{..} delta = liftIO $
             (,) <$> peekElemOff (castPtr p) i1 <*> peekElemOff (castPtr p) i2
         (x1, x2) <- withAcc gltf outAcc bin $ \p ->
             (,) <$> ipRead ip p i1 <*> ipRead ip p i2
-        SMV.write asSpatialState i (AniChanState t' i1)
+        MV.write asSpatialState i (AniChanState t' i1)
         return $ ipLinear ip (t1, x1) (t2, x2) t'
       where
         seekIdx p count idx t
