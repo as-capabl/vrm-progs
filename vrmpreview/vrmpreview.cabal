@@ -28,6 +28,7 @@ executable vrmpreview
                      , mtl
                      , holz
                      , gl
+                     , GLFW-b
                      , linear
                      , containers
                      , bytestring

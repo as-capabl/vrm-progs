@@ -37,6 +37,7 @@ import Data.GlTF
 import Data.BoundingBox (union)
 import Graphics.Holz.System hiding (registerTextures, Texture)
 import Graphics.GL
+import qualified Graphics.UI.GLFW as GLFW
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Aeson as J
@@ -115,6 +116,8 @@ main =
     scene <- maybe (die "Scene index out of range\n") return $
         glTFScenes gltf !? scIx
 
+    ani <- maybe (die "No Animation\n") return $
+        glTFAnimations gltf !? 0
     {-
     let accs = glTFAccessors gltf
     forM_ accs $ \acc ->
@@ -146,22 +149,33 @@ main =
         -- planeDir <- getUniform prog "planeDir"
 
         (vbs, txs) <- runMRShaderT shader $ mapToGL gltf bin scene
-        vTr <- newIORef (initTrans bbox)
+        aniState <- initAniState gltf bin ani
+        -- vTr <- newIORef (initTrans bbox)
+        vT <-
+          do
+            t0 <- liftIO $ fromMaybe 0 <$> GLFW.getTime
+            newIORef t0
 
         forever $ runReaderT `flip` w $ withFrame w $ runMRShaderT shader $
           do
             windowShouldClose >>= bool (return ()) exitSuccess
 
-            tr <- readIORef vTr
-            writeIORef vTr $! rotZX (pi * 0.005) !*! tr
+            -- tr <- readIORef vTr
+            -- writeIORef vTr $! rotZX (pi * 0.005) !*! tr
+            delta <-
+              do
+                t <- readIORef vT
+                t' <- liftIO $ fromMaybe 0 <$> GLFW.getTime
+                writeIORef vT t'
+                return $ realToFrac (t' - t)
 
             initView
-            liftIO $ with tr $ \p ->
-                glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
+            --  liftIO $ with tr $ \p ->
+            --    glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
             liftIO $ with (V3 0.577 0.577 0.577 :: V3 Float) $ \p ->
                 glUniform3fv (locationPlaneDir shader) 1 (castPtr p)
             clearColor grayColor
-            drawScene gltf vbs scene
+            drawScene gltf vbs scene aniState delta
             -- forM_ vbs $ \(tx, env, vb) ->
 
 initView :: MonadHolz m => MRShaderT m ()
@@ -461,8 +475,8 @@ calcBBox gltf scene =
         return $ BoxUnion (Box minimum maximum)
 
 
-drawScene :: MonadHolz m => GlTF -> MeshMap -> Scene -> MRShaderT m ()
-drawScene gltf mm scene = mapM_ drawNode $ sceneNodes scene
+drawScene :: MonadHolz m => GlTF -> MeshMap -> Scene -> NodeAniState -> Float -> MRShaderT m ()
+drawScene gltf mm scene aniState delta = mapM_ drawNode $ sceneNodes scene
   where
     drawNode nodeId =
       do
@@ -545,12 +559,12 @@ linearInterpolation (t1, x1) (t2, x2) t
     delta = t2 - t1
     dmin = 0.00000001
 
-ipScale :: Interpolator Float
+ipScale :: Interpolator (V3 Float)
 ipScale = Interpolator {..}
   where
-    ipSize = sizeOf (undefined :: Float)
+    ipSize = sizeOf (undefined :: V3 Float)
     ipRead p i = peekElemOff (castPtr p) i
-    ipDefault = 1
+    ipDefault = V3 1 1 1
     ipLinear = linearInterpolation
 
 ipRotate :: Interpolator (Quaternion Float)
@@ -579,10 +593,11 @@ ipTrans = Interpolator {..}
 tickAniState :: MonadIO m => GlTF -> BinChunk -> AniState -> Float -> m (M44 Float)
 tickAniState gltf bin AniState{..} delta = liftIO $
   do
-    s <- doTick 0 ipScale
+    V3 sx sy sz <- doTick 0 ipScale
+    let sMat = V3 (V3 sx 0 0) (V3 0 sy 0) (V3 0 0 sz)
     r <- doTick 1 ipRotate
     t <- doTick 2 ipTrans
-    return $  mkTransformationMat (fromQuaternion r !!* s) t
+    return $ mkTransformationMat (fromQuaternion r !*! sMat) t
   where
     doTick :: Int -> Interpolator a -> IO a
     doTick i ip = doTickImpl (asSpatialAni V.! i) i ip
