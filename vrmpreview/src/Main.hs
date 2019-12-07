@@ -116,8 +116,7 @@ main =
     scene <- maybe (die "Scene index out of range\n") return $
         glTFScenes gltf !? scIx
 
-    ani <- maybe (die "No Animation\n") return $
-        glTFAnimations gltf !? 0
+    let ani = glTFAnimations gltf !? 0
     {-
     let accs = glTFAccessors gltf
     forM_ accs $ \acc ->
@@ -148,9 +147,10 @@ main =
         -- planeLight <- getUniform prog "planeLight"
         -- planeDir <- getUniform prog "planeDir"
 
+
         (vbs, txs) <- runMRShaderT shader $ mapToGL gltf bin scene
-        aniState <- initAniState gltf bin ani
-        -- vTr <- newIORef (initTrans bbox)
+        aniState <- mapM (initAniState gltf bin) ani
+        vTr <- newIORef (initTrans bbox)
         vT <-
           do
             t0 <- liftIO $ fromMaybe 0 <$> GLFW.getTime
@@ -160,8 +160,6 @@ main =
           do
             windowShouldClose >>= bool (return ()) exitSuccess
 
-            -- tr <- readIORef vTr
-            -- writeIORef vTr $! rotZX (pi * 0.005) !*! tr
             delta <-
               do
                 t <- readIORef vT
@@ -169,9 +167,12 @@ main =
                 writeIORef vT t'
                 return $ realToFrac (t' - t)
 
+            tr <- readIORef vTr
+            writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
+
             initView
-            --  liftIO $ with tr $ \p ->
-            --    glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
+            liftIO $ with tr $ \p ->
+                glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
             liftIO $ with (V3 0.577 0.577 0.577 :: V3 Float) $ \p ->
                 glUniform3fv (locationPlaneDir shader) 1 (castPtr p)
             clearColor grayColor
@@ -475,7 +476,7 @@ calcBBox gltf scene =
         return $ BoxUnion (Box minimum maximum)
 
 
-drawScene :: MonadHolz m => GlTF -> MeshMap -> Scene -> NodeAniState -> Float -> MRShaderT m ()
+drawScene :: MonadHolz m => GlTF -> MeshMap -> Scene -> Maybe NodeAniState -> Float -> MRShaderT m ()
 drawScene gltf mm scene aniState delta = mapM_ drawNode $ sceneNodes scene
   where
     drawNode nodeId =
