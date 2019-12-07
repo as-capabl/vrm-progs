@@ -36,6 +36,7 @@ import System.Environment (getArgs)
 import Data.GlTF
 import Data.BoundingBox (union)
 import Graphics.Holz.System hiding (registerTextures, Texture)
+import qualified Graphics.Holz.Input as HIn
 import Graphics.GL
 import qualified Graphics.UI.GLFW as GLFW
 import Linear hiding (trace)
@@ -53,6 +54,9 @@ import Foreign.Storable.Generic
 import qualified Codec.Picture as Jp
 import Text.RawString.QQ (r)
 
+--
+-- Shader
+--
 data MRShader = MRShader {
     shaderProg :: GLuint,
     locationModel :: GLint,
@@ -84,6 +88,51 @@ runMRShaderT shader action =
 askMRShader :: Monad m => (MRShader -> a) -> MRShaderT m a
 askMRShader f = MRShaderT $ f <$> ask
 
+--
+-- Mouse handling
+--
+data MouseGrip = MouseGrip
+  {
+    mouseGripPos :: V2 Float,
+    mouseGripMat :: M44 Float
+  }
+
+onMouseEvent ::
+    (IORef (Maybe MouseGrip)) -> (IORef (M44 Float)) -> Window -> HIn.Chatter Int -> IO ()
+onMouseEvent vGrip vMat win (HIn.Down _) =
+  do
+    mat <- readIORef vMat
+    curPos <- runReaderT getCursorPos win
+    let mgr = Just $ MouseGrip
+          {
+            mouseGripPos = curPos,
+            mouseGripMat = mat
+          }
+    writeIORef vGrip mgr
+onMouseEvent vGrip _ _ (HIn.Up _) = writeIORef vGrip Nothing
+
+onMouseUpdate ::
+    MonadHolz m =>
+    (IORef (Maybe MouseGrip)) -> Float -> (IORef (M44 Float)) -> m ()
+onMouseUpdate vGrip unit vMat = ($> ()) . runMaybeT $
+  do
+    Just MouseGrip{..} <- readIORef vGrip
+    newPos <- getCursorPos
+    let dif = newPos - mouseGripPos
+        fac = norm dif / unit * pi
+        V2 dx_ dy_ = dif ^/ fac
+        (_, dx) = properFraction dx_
+        (_, dy) = properFraction dy_
+        rot = V3
+            (V3 (cos dx) 0 (sin dx * cos dy))
+            (V3 0 (cos dy) (-sin dy * cos dx))
+            (V3 (sin dx * cos dy) (sin dy * cos dx) (cos dx * cos dy))
+        newMat = mkTransformationMat rot 0 !*! mouseGripMat
+    writeIORef vMat newMat
+
+--
+-- Utility
+--
 die :: MonadIO m => Text -> m a
 die s = BS.putStr (encodeUtf8 s) >> exitFailure
 
@@ -133,7 +182,7 @@ main =
         BS.putStr "\n"
     -}
 
-    let bbox = calcBBox gltf scene
+    let bbox@(Box _ (V3 bboxX bboxY bboxZ)) = calcBBox gltf scene
 
     logOpt <- logOptionsHandle stderr False
     withHolz $ withLogFunc logOpt $ \logFunc -> runRIO logFunc $
@@ -142,11 +191,6 @@ main =
         logInfo $ displayShow bbox
 
         shader <- makeVRMShader
-        -- let prog = shaderProg shader
-        -- ambient <- getUniform prog "ambient"
-        -- planeLight <- getUniform prog "planeLight"
-        -- planeDir <- getUniform prog "planeDir"
-
 
         (vbs, txs) <- runMRShaderT shader $ mapToGL gltf bin scene
         aniState <- mapM (initAniState gltf bin) ani
@@ -155,6 +199,10 @@ main =
           do
             t0 <- liftIO $ fromMaybe 0 <$> GLFW.getTime
             newIORef t0
+
+        vMouseGrip <- newIORef Nothing
+
+        liftIO $ runReaderT (linkMouseButton (onMouseEvent vMouseGrip vTr w)) w
 
         forever $ runReaderT `flip` w $ withFrame w $ runMRShaderT shader $
           do
@@ -167,8 +215,9 @@ main =
                 writeIORef vT t'
                 return $ realToFrac (t' - t)
 
+            onMouseUpdate vMouseGrip 1 vTr
             tr <- readIORef vTr
-            writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
+            -- writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
 
             initView
             liftIO $ with tr $ \p ->
@@ -177,7 +226,6 @@ main =
                 glUniform3fv (locationPlaneDir shader) 1 (castPtr p)
             clearColor grayColor
             drawScene gltf vbs scene aniState delta
-            -- forM_ vbs $ \(tx, env, vb) ->
 
 initView :: MonadHolz m => MRShaderT m ()
 initView =
@@ -197,7 +245,7 @@ initView =
 
 
 initTrans :: Box V3 Float -> M44 Float
-initTrans bbox = mkTransformationMat (fromDiag33 r r r) (V3 0.0 vOff 0.0)
+initTrans bbox = mkTransformationMat (fromDiag33 r r (-r)) (V3 0.0 vOff 0.0)
   where
     Box (V3 lModel bModel _) (V3 rModel tModel _) = bbox
     wModel = rModel - lModel
