@@ -119,15 +119,12 @@ onMouseUpdate vGrip unit vMat = ($> ()) . runMaybeT $
     Just MouseGrip{..} <- readIORef vGrip
     newPos <- getCursorPos
     let dif = newPos - mouseGripPos
-        fac = norm dif / unit * pi
-        V2 dx_ dy_ = dif ^/ fac
-        (_, dx) = properFraction dx_
-        (_, dy) = properFraction dy_
-        rot = V3
-            (V3 (cos dx) 0 (sin dx * cos dy))
-            (V3 0 (cos dy) (-sin dy * cos dx))
-            (V3 (sin dx * cos dy) (sin dy * cos dx) (cos dx * cos dy))
-        newMat = mkTransformationMat rot 0 !*! mouseGripMat
+        r = norm dif
+    guard $ r > 0.00001
+    let
+        V2 dx dy = dif ^/ r
+        rot = axisAngle (V3 dy dx 0) (r / unit * pi)
+        newMat = mkTransformation rot 0 !*! mouseGripMat
     writeIORef vMat newMat
 
 --
@@ -182,7 +179,7 @@ main =
         BS.putStr "\n"
     -}
 
-    let bbox@(Box _ (V3 bboxX bboxY bboxZ)) = calcBBox gltf scene
+    let bbox = calcBBox gltf scene
 
     logOpt <- logOptionsHandle stderr False
     withHolz $ withLogFunc logOpt $ \logFunc -> runRIO logFunc $
@@ -215,7 +212,7 @@ main =
                 writeIORef vT t'
                 return $ realToFrac (t' - t)
 
-            onMouseUpdate vMouseGrip 1 vTr
+            onMouseUpdate vMouseGrip ((canvasSize ^. _x) / 2) vTr
             tr <- readIORef vTr
             -- writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
 
