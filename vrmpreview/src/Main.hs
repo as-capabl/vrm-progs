@@ -91,40 +91,40 @@ askMRShader f = MRShaderT $ f <$> ask
 --
 -- Mouse handling
 --
-data MouseGrip = MouseGrip
+data MouseGrab = MouseGrab
   {
-    mouseGripPos :: V2 Float,
-    mouseGripMat :: M44 Float
+    mouseGrabPos :: V2 Float,
+    mouseGrabMat :: M44 Float
   }
 
 onMouseEvent ::
-    (IORef (Maybe MouseGrip)) -> (IORef (M44 Float)) -> Window -> HIn.Chatter Int -> IO ()
-onMouseEvent vGrip vMat win (HIn.Down _) =
+    (IORef (Maybe MouseGrab)) -> (IORef (M44 Float)) -> Window -> HIn.Chatter Int -> IO ()
+onMouseEvent vGrab vMat win (HIn.Down _) =
   do
     mat <- readIORef vMat
     curPos <- runReaderT getCursorPos win
-    let mgr = Just $ MouseGrip
+    let mgr = Just $ MouseGrab
           {
-            mouseGripPos = curPos,
-            mouseGripMat = mat
+            mouseGrabPos = curPos,
+            mouseGrabMat = mat
           }
-    writeIORef vGrip mgr
-onMouseEvent vGrip _ _ (HIn.Up _) = writeIORef vGrip Nothing
+    writeIORef vGrab mgr
+onMouseEvent vGrab _ _ (HIn.Up _) = writeIORef vGrab Nothing
 
 onMouseUpdate ::
     MonadHolz m =>
-    (IORef (Maybe MouseGrip)) -> Float -> (IORef (M44 Float)) -> m ()
-onMouseUpdate vGrip unit vMat = ($> ()) . runMaybeT $
+    (IORef (Maybe MouseGrab)) -> Float -> (IORef (M44 Float)) -> m ()
+onMouseUpdate vGrab unit vMat = ($> ()) . runMaybeT $
   do
-    Just MouseGrip{..} <- readIORef vGrip
+    Just MouseGrab{..} <- readIORef vGrab
     newPos <- getCursorPos
-    let dif = newPos - mouseGripPos
+    let dif = newPos - mouseGrabPos
         r = norm dif
     guard $ r > 0.00001
     let
         V2 dx dy = dif ^/ r
         rot = axisAngle (V3 dy dx 0) (r / unit * pi)
-        newMat = mkTransformation rot 0 !*! mouseGripMat
+        newMat = mkTransformation rot 0 !*! mouseGrabMat
     writeIORef vMat newMat
 
 --
@@ -197,9 +197,9 @@ main =
             t0 <- liftIO $ fromMaybe 0 <$> GLFW.getTime
             newIORef t0
 
-        vMouseGrip <- newIORef Nothing
+        vMouseGrab <- newIORef Nothing
 
-        liftIO $ runReaderT (linkMouseButton (onMouseEvent vMouseGrip vTr w)) w
+        liftIO $ runReaderT (linkMouseButton (onMouseEvent vMouseGrab vTr w)) w
 
         forever $ runReaderT `flip` w $ withFrame w $ runMRShaderT shader $
           do
@@ -212,7 +212,7 @@ main =
                 writeIORef vT t'
                 return $ realToFrac (t' - t)
 
-            onMouseUpdate vMouseGrip ((canvasSize ^. _x) / 2) vTr
+            onMouseUpdate vMouseGrab ((canvasSize ^. _x) / 2) vTr
             tr <- readIORef vTr
             -- writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
 
