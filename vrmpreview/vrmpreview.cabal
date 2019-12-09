@@ -18,7 +18,11 @@ extra-source-files:  CHANGELOG.md
 
 executable vrmpreview
   main-is:             Main.hs
-  -- other-modules:
+  other-modules:       Graphics.GlTF.Type
+                     , Graphics.GlTF.Animation
+                     , Graphics.GlTF.Shader
+                     , Graphics.GlTF.Util
+                     , Graphics.GlTF
   -- other-extensions:
   build-depends:       base >=4.11 && <5
                      , aeson
