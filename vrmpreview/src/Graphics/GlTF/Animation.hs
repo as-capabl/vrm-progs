@@ -17,16 +17,10 @@ where
 
 import RIO hiding (first, second)
 import RIO.Vector ((!?))
-import qualified RIO.Vector as BV
-import qualified Data.Vector.Storable as SV
-import qualified RIO.Text as T
-import qualified RIO.ByteString as BS
-import qualified Data.ByteString.Unsafe as BS
 import qualified RIO.Vector as V
 import qualified RIO.Vector.Unsafe as V
 import qualified RIO.Vector.Partial as V
 import qualified Data.Vector.Generic.Mutable as MV
-import qualified Data.Vector.Storable.Mutable as SMV
 import Data.GlTF
 import Linear hiding (trace)
 import Foreign.Ptr
@@ -37,10 +31,11 @@ import Graphics.GlTF.Type
 initAniState ::
     (MonadIO m, MonadUnliftIO m, HasLogFunc env, MonadReader env m) =>
     GlTF -> BinChunk -> Animation -> m NodeAniState
-initAniState gltf bin Animation{..} =
+initAniState gltf _ Animation{..} =
   do
     mv <- withUnliftIO $  \uio ->
         MV.replicateM (V.length $ glTFNodes gltf) (unliftIO uio newAniState)
+    undefined
     liftIO $ V.unsafeFreeze mv
   where
     newAniState =
@@ -78,7 +73,7 @@ ipRotate = Interpolator {..}
     ipSize = sizeOf (undefined :: Float) * 4
     ipRead p0 i =
       do
-        let p = castPtr @Float p
+        let p = castPtr @_ @Float p0
         x <- peekElemOff p (4 * i)
         y <- peekElemOff p (4 * i + 1)
         z <- peekElemOff p (4 * i + 2)
@@ -109,7 +104,7 @@ tickAniState gltf bin AniState{..} delta = liftIO $
 
     doTickImpl ::
         Maybe (AnimationChannel, AnimationSampler, Accessor, Accessor) -> Int -> Interpolator a -> IO a
-    doTickImpl (Just (chan, smp, inAcc, outAcc)) i ip =
+    doTickImpl (Just (_, _, inAcc, outAcc)) i ip =
       do
         AniChanState {..} <- MV.read asSpatialState i
         let Just tMax = accessorMax inAcc !? 0
