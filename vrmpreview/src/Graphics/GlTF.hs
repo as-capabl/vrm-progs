@@ -17,43 +17,30 @@ where
 
 import RIO hiding (first, second)
 import RIO.Vector ((!?))
+import qualified Data.ByteString.Unsafe as BS
 import qualified RIO.Vector as BV
 import qualified Data.Vector.Storable as SV
 import qualified RIO.Text as T
-import qualified RIO.ByteString as BS
-import qualified Data.ByteString.Unsafe as BS
 import qualified RIO.Vector as V
 import qualified RIO.Vector.Unsafe as V
 import qualified RIO.Vector.Partial as V
 import qualified Data.Vector.Generic.Mutable as MV
 import qualified Data.Vector.Storable.Mutable as SMV
+import qualified Data.IntMap as IM
 import Control.Monad.Trans.Maybe
-import Control.Monad.Trans.Cont
 import Control.Monad.Except
-import System.Environment (getArgs)
 import Data.GlTF
-import Data.BoundingBox (union)
 import Graphics.Holz.System hiding (registerTextures, Texture)
-import qualified Graphics.Holz.Input as HIn
 import Graphics.GL
-import qualified Graphics.UI.GLFW as GLFW
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Aeson as J
-import qualified Data.IntMap.Strict (IntMap)
-import qualified Data.IntMap.Strict as IM
 import Foreign.Ptr
 import Foreign.ForeignPtr
-import Foreign.Marshal.Array (allocaArray)
 import Foreign.Marshal.Utils (with)
-import Foreign.C.String
-import Foreign.Storable
-import Foreign.Storable.Generic
 import qualified Codec.Picture as Jp
 
 import Graphics.GlTF.Type
 import Graphics.GlTF.Shader
-import Graphics.GlTF.Animation
 import Graphics.GlTF.Util
 
 mapToGL ::
@@ -71,15 +58,15 @@ mapToGL gltf bin scene =
       do
         nd <- maybe (throwError "Out of range in node.") return $
             glTFNodes gltf !? fromIntegral nodeId
-        runMaybeT $
+        _ <- runMaybeT $
           do
             mshId <- MaybeT $ return $ nodeMesh nd
             msh <- MaybeT $ return $ glTFMeshes gltf !? fromIntegral mshId
-            mvbs <- lift . lift $ loadMesh refTM mshId msh
+            mvbs <- lift . lift $ loadMesh refTM msh
             liftIO $ MV.write refMM nodeId (BV.fromList $ catMaybes mvbs)
         mapM_ (lift . loadNode refMM refTM) $ nodeChildren nd
 
-    loadMesh refTM mshId msh =
+    loadMesh refTM msh =
       do
         let prims = meshPrimitives msh
         mapM (loadPrim refTM) (V.toList prims)
@@ -107,7 +94,7 @@ mapToGL gltf bin scene =
             midcs = meshPrimitiveIndices p >>= (glTFAccessors gltf !?)
         -- logInfo (displayShow attrs)
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
-        norm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
+        nm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
         locDiffuse <- lift $ locationBaseColorFactor <$> MRShaderT ask
         locLamFactor <- lift $ locationLamFactor <$> MRShaderT ask
@@ -124,7 +111,7 @@ mapToGL gltf bin scene =
                 glUniform1f locLamFactor $ metallic
                 glUniform1f locNlamFactor $ roughness
                 glBindTexture GL_TEXTURE_2D $ fromMaybe 0 registeredTx
-                glDrawElements GL_TRIANGLES (fromIntegral $ eleSiz * idxCount) idxT nullPtr
+                glDrawElements GL_TRIANGLES (eleSiz * idxCount) idxT nullPtr
 
         let (idcBuf, drawPrim_) = case midcs
               of
@@ -137,7 +124,7 @@ mapToGL gltf bin scene =
                   of
                     Just uv -> [bufferDataByAccessor gltf bin (ArrayBuffer 1) uv]
                     Nothing -> [])
-                ++ [bufferDataByAccessor gltf bin (ArrayBuffer 2) norm]
+                ++ [bufferDataByAccessor gltf bin (ArrayBuffer 2) nm]
                 ++ idcBuf
 
         let nBuf = length vboSrc
@@ -203,6 +190,9 @@ mapToGL gltf bin scene =
 
 data TargetBuffer = ArrayBuffer GLuint | ElementArrayBuffer
 
+bufferDataByAccessor ::
+    (MonadIO m, MonadUnliftIO m, MonadThrow m) =>
+    GlTF -> BinChunk -> TargetBuffer -> Accessor -> SV.Vector GLuint -> Int -> m ()
 bufferDataByAccessor gltf bin tgt acc@Accessor{..} vbo i =
   do
     glBindBuffer bufKind $ vbo V.! i
@@ -232,7 +222,7 @@ bufferDataByAccessor gltf bin tgt acc@Accessor{..} vbo i =
         glEnableVertexAttribArray nAttr
 
 
-ptrOfs acc = nullPtr `plusPtr` fromMaybe 0 (accessorByteOffset acc)
+-- ptrOfs acc = nullPtr `plusPtr` fromMaybe 0 (accessorByteOffset acc)
 
 
 drawScene ::
@@ -245,7 +235,7 @@ drawScene gltf mm scene aniState delta = mapM_ drawNode $ sceneNodes scene
         nd <- maybe (error "Node out of range") return $
           do
             glTFNodes gltf !? fromIntegral nodeId
-        runMaybeT $
+        _ <- runMaybeT $
           do
             prims <- MaybeT $ return $ mm !? nodeId
             V.forM_ prims $ \prim ->

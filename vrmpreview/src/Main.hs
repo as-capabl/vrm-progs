@@ -19,19 +19,8 @@ module Main where
 
 import RIO hiding (first, second)
 import RIO.Vector ((!?))
-import qualified RIO.Vector as BV
-import qualified Data.Vector.Storable as SV
-import qualified RIO.Text as T
 import qualified RIO.ByteString as BS
-import qualified Data.ByteString.Unsafe as BS
-import qualified RIO.Vector as V
-import qualified RIO.Vector.Unsafe as V
-import qualified RIO.Vector.Partial as V
-import qualified Data.Vector.Generic.Mutable as MV
-import qualified Data.Vector.Storable.Mutable as SMV
 import Control.Monad.Trans.Maybe
-import Control.Monad.Trans.Cont
-import Control.Monad.Except
 import System.Environment (getArgs)
 import Data.GlTF
 import Data.BoundingBox (union)
@@ -41,17 +30,9 @@ import Graphics.GL
 import qualified Graphics.UI.GLFW as GLFW
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Aeson as J
-import qualified Data.IntMap.Strict (IntMap)
-import qualified Data.IntMap.Strict as IM
+-- import qualified Data.Aeson as J
 import Foreign.Ptr
-import Foreign.ForeignPtr
-import Foreign.Marshal.Array (allocaArray)
 import Foreign.Marshal.Utils (with)
-import Foreign.C.String
-import Foreign.Storable
-import Foreign.Storable.Generic
-import qualified Codec.Picture as Jp
 
 import Graphics.GlTF.Type
 import Graphics.GlTF.Shader
@@ -85,7 +66,7 @@ onMouseEvent vGrab _ _ (HIn.Up _) = writeIORef vGrab Nothing
 onMouseUpdate ::
     MonadHolz m =>
     (IORef (Maybe MouseGrab)) -> Float -> (IORef (M44 Float)) -> m ()
-onMouseUpdate vGrab unit vMat = ($> ()) . runMaybeT $
+onMouseUpdate vGrab unitLen vMat = ($> ()) . runMaybeT $
   do
     Just MouseGrab{..} <- readIORef vGrab
     newPos <- getCursorPos
@@ -94,7 +75,7 @@ onMouseUpdate vGrab unit vMat = ($> ()) . runMaybeT $
     guard $ r > 0.00001
     let
         V2 dx dy = dif ^/ r
-        rot = axisAngle (V3 dy dx 0) (r / unit * pi)
+        rot = axisAngle (V3 dy dx 0) (r / unitLen * pi)
         newMat = mkTransformation rot 0 !*! mouseGrabMat
     writeIORef vMat newMat
 
@@ -151,7 +132,7 @@ main =
 
         shader <- makeVRMShader
 
-        (vbs, txs) <- runMRShaderT shader $ mapToGL gltf bin scene
+        (vbs, _) <- runMRShaderT shader $ mapToGL gltf bin scene
         aniState <- mapM (initAniState gltf bin) ani
         vTr <- newIORef (initTrans bbox)
         vT <-
@@ -235,8 +216,10 @@ rotZX th = mkTransformationMat rotM trV
     trV = V3 0 0 0
 
 
+grayColor :: V4 Float
 grayColor = V4 0.7 0.7 0.7 1.0
 
+blueColor :: V4 Float
 blueColor = V4 0 0 1.0 (0.5)
 
 
@@ -247,7 +230,7 @@ dispEType 5122 = "SHORT"
 dispEType 5123 = "UNSIGNED_SHORT"
 dispEType 5125 = "UNSIGNED_INT"
 dispEType 5126 = "FLOAT"
-dispEType i = "Unknown"
+dispEType _ = "Unknown"
 
 newtype BoxUnion f a = BoxUnion { unBoxUnion :: Box f a }
 
