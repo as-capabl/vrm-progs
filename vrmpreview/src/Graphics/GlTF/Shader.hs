@@ -30,6 +30,7 @@ import qualified Data.Vector.Generic.Mutable as MV
 import qualified Data.Vector.Storable.Mutable as SMV
 import Control.Monad.Trans.Maybe
 import Graphics.Holz.System hiding (registerTextures, Texture)
+import qualified Graphics.Holz.Shader as Hz
 import Graphics.GL
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
@@ -38,6 +39,7 @@ import qualified Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IM
 import Foreign.Ptr
 import Foreign.ForeignPtr
+import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array (allocaArray)
 import Foreign.Marshal.Utils (with)
 import Foreign.C.String
@@ -46,65 +48,16 @@ import Foreign.Storable.Generic
 import qualified Codec.Picture as Jp
 import Text.RawString.QQ (r)
 import Data.GlTF
+import GHC.Records
 
 import Graphics.GlTF.Type
 
 makeVRMShader :: MonadIO m => m MRShader
-makeVRMShader = liftIO $
-  do
-    vertexShader <- glCreateShader GL_VERTEX_SHADER
-    fragmentShader <- glCreateShader GL_FRAGMENT_SHADER
-    compileShader vertexShaderSource vertexShader
-    compileShader fragmentShaderSource fragmentShader
-
-    shaderProg <- glCreateProgram
-    glAttachShader shaderProg vertexShader
-    glAttachShader shaderProg fragmentShader
-
-    withCString "in_Position" $ glBindAttribLocation shaderProg 0
-    withCString "in_UV" $ glBindAttribLocation shaderProg 1
-    withCString "in_Normal" $ glBindAttribLocation shaderProg 2
-
-    glLinkProgram shaderProg
-    glUseProgram shaderProg
-
-    linked <- overPtr (glGetProgramiv shaderProg GL_LINK_STATUS)
-    when (linked == GL_FALSE) $ do
-        maxLength <- overPtr (glGetProgramiv shaderProg GL_INFO_LOG_LENGTH)
-        allocaArray (fromIntegral maxLength) $ \ptr -> do
-            glGetProgramInfoLog shaderProg maxLength nullPtr ptr
-            BS.packCString ptr >>= BS.putStr
-
-    locationModel <- getUniform shaderProg "model"
-    locationProjection <- getUniform shaderProg "projection"
-    locationSight <- getUniform shaderProg "sight"
-    locationBaseColorFactor <- getUniform shaderProg "baseColorFactor"
-    locationPlaneDir <- getUniform shaderProg "planeDir"
-    locationLamFactor <- getUniform shaderProg "lamFactor"
-    locationNlamFactor <- getUniform shaderProg "nlamFactor"
-    locationMetallic <- getUniform shaderProg "metallic"
-
-    with (V4 1 1 1 1 :: V4 Float) $ \ptr -> do
-        glUniform4fv locationBaseColorFactor 1 (castPtr ptr)
-
-    with (V3 1 1 1 :: V3 Float) $ \ptr -> do
-        glUniform4fv locationPlaneDir 1 (castPtr ptr)
-
-    return MRShader{..}
+makeVRMShader = Hz.makeShader vertexShaderSource fragmentShaderSource
 
 
-vertexShaderSource :: String
-vertexShaderSource = [r|
-    #version 330
-    uniform mat4 projection;
-    uniform mat4 model;
-    in vec3 in_Position;
-    in vec2 in_UV;
-    in vec3 in_Normal;
-    out vec2 texUV;
-    out vec3 normal;
-    out vec4 viewPos;
-    out vec4 color;
+vertexShaderSource :: Hz.VertexShaderSource MRUniform MRVertex MRFragment
+vertexShaderSource = Hz.VertexShaderSource $ [r|
     void main(void) {
         viewPos = model * vec4(in_Position, 1.0);
         gl_Position = projection * viewPos;
@@ -114,24 +67,13 @@ vertexShaderSource = [r|
     }
 |]
 
-fragmentShaderSource :: String
-fragmentShaderSource = [r|
-    #version 330
+fragmentShaderSource :: Hz.FragmentShaderSource MRUniform MRFragment
+fragmentShaderSource = Hz.FragmentShaderSource $ [r|
     #define PI 3.1415926538
     #define dielectricSpecular vec4(0.04, 0.04, 0.04, 1)
     #define black vec4(0, 0, 0, 1)
-    out vec4 fragColor;
-    in vec2 texUV;
-    in vec3 normal;
-    in vec4 viewPos;
-    in vec4 color;
-    in float metallic;
     uniform sampler2D tex;
-    uniform vec4 baseColorFactor;
-    uniform vec3 planeDir;
-    uniform vec3 sight;
-    uniform float lamFactor;
-    uniform float nlamFactor;
+    out vec4 fragColor;
     void main(void){
         vec3 nnorm = normalize(normal);
         vec3 h = normalize(sight + planeDir);
@@ -155,7 +97,7 @@ fragmentShaderSource = [r|
 
 registerTextures :: MonadIO m => Sampler -> V2 Int -> [(V2 Int, Jp.Image Jp.PixelRGBA8)] -> m GLuint
 registerTextures Sampler{..} (V2 sw sh) imgs = liftIO $ do
-    tex <- overPtr (glGenTextures 1)
+    tex <- alloca $ \p -> glGenTextures 1 p >> peek p
     glBindTexture GL_TEXTURE_2D tex
     glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER $ fromMaybe GL_LINEAR samplerMinFilter
     glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER $ fromMaybe GL_LINEAR samplerMagFilter
@@ -187,3 +129,4 @@ registerTextures Sampler{..} (V2 sw sh) imgs = liftIO $ do
     glGenerateMipmap GL_TEXTURE_2D
 
     return tex
+

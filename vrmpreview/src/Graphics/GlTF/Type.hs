@@ -12,6 +12,10 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedLabels #-}
 
 module
     Graphics.GlTF.Type
@@ -32,8 +36,8 @@ import qualified Data.Vector.Storable.Mutable as SMV
 import Data.GlTF
 import Linear hiding (trace)
 import Graphics.GL
+import qualified Graphics.Holz.Shader as Hz
 import Foreign.Storable.Generic
-
 
 data MappedPrim = MappedPrim {
     releasePrim :: IO (),
@@ -47,22 +51,47 @@ type TxMap = IntMap GLuint
 --
 -- Shader
 --
-data MRShader = MRShader {
-    shaderProg :: GLuint,
-    locationModel :: GLint,
-    locationProjection :: GLint,
-    locationPlaneDir :: GLint,
-    locationSight :: GLint,
-    locationBaseColorFactor :: GLint,
-    locationMetallic :: GLint,
-    locationLamFactor :: GLint,
-    locationNlamFactor :: GLint
+data MRUniform h = MRUniform {
+    model :: h (M44 Float),
+    projection :: h (M44 Float),
+    planeDir :: h (V3 Float),
+    sight :: h (V3 Float),
+    baseColorFactor :: h (V4 Float),
+    metallic :: h Float,
+    lamFactor :: h Float,
+    nlamFactor :: h Float
   }
+    deriving Generic
 
-newtype MRShaderT m a = MRShaderT {
-    unMRShaderT :: ReaderT MRShader m a
+-- instance GStorable MRUniform where {}
+
+
+data MRVertex = MRVertex {
+    in_Position :: V3 Float,
+    in_UV :: V2 Float,
+    in_Normal :: V3 Float
   }
-    deriving (Functor, Applicative, Monad, MonadIO, MonadTrans)
+    deriving (Eq, Show, Generic)
+
+-- instance GStorable MRVertex where {}
+
+data MRFragment = MRFragment {
+    texUV :: V2 Float,
+    normal :: V3 Float,
+    viewPos :: V4 Float,
+    color :: V4 Float
+  }
+    deriving (Eq, Show, Generic)
+
+-- instance GStorable MRFragment where {}
+
+type MRShader = Hz.Shader MRUniform MRVertex
+
+type HasMRShader r =
+    (Hz.HasShader r, Hz.ShaderUniform r ~ MRUniform, Hz.ShaderVertex r ~ MRVertex)
+
+{-
+type MRShaderT m = ReaderT MRShader m
 
 instance MonadReader r m => MonadReader r (MRShaderT m)
   where
@@ -77,6 +106,7 @@ runMRShaderT shader action =
 
 askMRShader :: Monad m => (MRShader -> a) -> MRShaderT m a
 askMRShader f = MRShaderT $ f <$> ask
+-}
 
 --
 -- Animation

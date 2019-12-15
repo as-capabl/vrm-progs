@@ -10,6 +10,9 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedLabels #-}
 
 module
     Graphics.GlTF
@@ -31,22 +34,26 @@ import Control.Monad.Trans.Maybe
 import Control.Monad.Except
 import Data.GlTF
 import Graphics.Holz.System hiding (registerTextures, Texture)
+import Graphics.Holz.Shader (setUniform)
 import Graphics.GL
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
 import Foreign.Ptr
+import Foreign.Storable
 import Foreign.ForeignPtr
 import Foreign.Marshal.Utils (with)
+import Foreign.Marshal.Alloc (alloca)
 import qualified Codec.Picture as Jp
+import GHC.Records
 
-import Graphics.GlTF.Type
+import Graphics.GlTF.Type as T
 import Graphics.GlTF.Shader
 import Graphics.GlTF.Util
 
 mapToGL ::
     forall m env.
-    (MonadIO m, HasLogFunc env, MonadReader env m, HasCallStack) =>
-    GlTF -> BinChunk -> Scene -> MRShaderT m (MeshMap, TxMap)
+    (HasMRShader env, HasLogFunc env, MonadHolz env m, HasCallStack) =>
+    GlTF -> BinChunk -> Scene -> m (MeshMap, TxMap)
 mapToGL gltf bin scene =
   do
     refMM <- liftIO $ MV.replicate (V.length $ glTFNodes gltf) (V.empty)
@@ -71,9 +78,12 @@ mapToGL gltf bin scene =
         let prims = meshPrimitives msh
         mapM (loadPrim refTM) (V.toList prims)
 
-    loadPrim :: IORef TxMap -> MeshPrimitive -> MRShaderT m (Maybe MappedPrim)
+    loadPrim ::
+        (HasMRShader env, MonadHolz env m) =>
+        IORef TxMap -> MeshPrimitive -> m (Maybe MappedPrim)
     loadPrim refTM p = runMaybeT $
       do
+        env <- ask
         let material = meshPrimitiveMaterial p >>= (glTFMaterials gltf !?)
             materialPbr = material >>= materialPbrMetallicRoughness
             baseColorFactor = fromMaybe (V4 1.0 1.0 1.0 1.0) $
@@ -96,20 +106,17 @@ mapToGL gltf bin scene =
         pos <- MaybeT $ return $ HM.lookup "POSITION" attrs >>= (glTFAccessors gltf !?)
         nm <- MaybeT $ return $ HM.lookup "NORMAL" attrs >>= (glTFAccessors gltf !?)
         -- BS.putStr $ T.encodeUtf8 $ T.pack $ show (nodeName nd)
-        locDiffuse <- lift $ locationBaseColorFactor <$> MRShaderT ask
-        locLamFactor <- lift $ locationLamFactor <$> MRShaderT ask
-        locNlamFactor <- lift $ locationNlamFactor <$> MRShaderT ask
         registeredTx <- maybe (return Nothing) (lift . loadAndRegisterTexture refTM) baseColorTx
 
-        let drawPrim_elem idcs vao =
+        let drawPrim_elem idcs vao = runReaderT `flip` env $
               do
                 let idxT = accessorComponentType idcs
                     eleSiz = sizeOfGLType idxT
                     idxCount = fromIntegral $ accessorCount idcs
                 glBindVertexArray vao
-                setUniform4FV locDiffuse baseColorFactor
-                glUniform1f locLamFactor $ metallic
-                glUniform1f locNlamFactor $ roughness
+                setUniform T.baseColorFactor baseColorFactor
+                setUniform T.lamFactor metallic
+                setUniform T.nlamFactor roughness
                 glBindTexture GL_TEXTURE_2D $ fromMaybe 0 registeredTx
                 glDrawElements GL_TRIANGLES (eleSiz * idxCount) idxT nullPtr
 
@@ -130,7 +137,7 @@ mapToGL gltf bin scene =
         let nBuf = length vboSrc
         (vao, vbo) <- liftIO $
           do
-            vao <- overPtr $ glGenVertexArrays 1
+            vao <- alloca $ \p -> glGenVertexArrays 1 p >> peek p
             glBindVertexArray vao
             vboM <- MV.unsafeNew nBuf
             SMV.unsafeWith vboM $ glGenBuffers (fromIntegral nBuf)
@@ -148,7 +155,7 @@ mapToGL gltf bin scene =
 
         return MappedPrim{..}
 
-    loadAndRegisterTexture :: IORef TxMap -> Texture -> MRShaderT m (Maybe GLuint)
+    loadAndRegisterTexture :: (HasMRShader env, MonadReader env m) => IORef TxMap -> Texture -> m (Maybe GLuint)
     loadAndRegisterTexture refTM tx = warnOnException $
       do
         imgIdx <- maybe (throwError "Image") return $ textureSource tx
@@ -226,8 +233,8 @@ bufferDataByAccessor gltf bin tgt acc@Accessor{..} vbo i =
 
 
 drawScene ::
-    MonadIO m =>
-    GlTF -> MeshMap -> Scene -> Maybe NodeAniState -> Float -> MRShaderT m ()
+    (MonadIO m, HasMRShader env, MonadReader env m) =>
+    GlTF -> MeshMap -> Scene -> Maybe NodeAniState -> Float -> m ()
 drawScene gltf mm scene aniState delta = mapM_ drawNode $ sceneNodes scene
   where
     drawNode nodeId =

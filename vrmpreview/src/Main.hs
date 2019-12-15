@@ -9,11 +9,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveGeneric #-}
-
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Main where
 
@@ -24,15 +20,13 @@ import Control.Monad.Trans.Maybe
 import System.Environment (getArgs)
 import Data.GlTF
 import Data.BoundingBox (union)
-import Graphics.Holz.System hiding (registerTextures, Texture)
+import Graphics.Holz.System
+import Graphics.Holz.Shader
 import qualified Graphics.Holz.Input as HIn
-import Graphics.GL
 import qualified Graphics.UI.GLFW as GLFW
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
 -- import qualified Data.Aeson as J
-import Foreign.Ptr
-import Foreign.Marshal.Utils (with)
 
 import Graphics.GlTF.Type
 import Graphics.GlTF.Shader
@@ -64,7 +58,7 @@ onMouseEvent vGrab vMat win (HIn.Down _) =
 onMouseEvent vGrab _ _ (HIn.Up _) = writeIORef vGrab Nothing
 
 onMouseUpdate ::
-    MonadHolz m =>
+    (MonadHolz env m, HasWindow env) =>
     (IORef (Maybe MouseGrab)) -> Float -> (IORef (M44 Float)) -> m ()
 onMouseUpdate vGrab unitLen vMat = ($> ()) . runMaybeT $
   do
@@ -91,6 +85,27 @@ die s = BS.putStr (encodeUtf8 s) >> exitFailure
 canvasSize :: V2 Float
 canvasSize = V2 640 960
 
+data App = App
+  {
+    appLogFunc :: LogFunc,
+    appWindow :: Window,
+    appShader :: MRShader
+  }
+
+instance HasShader App
+  where
+    type ShaderUniform App = MRUniform
+    type ShaderVertex App = MRVertex
+    getShader = appShader
+
+instance HasWindow App
+  where
+    getWindow = appWindow
+
+instance HasLogFunc App
+  where
+    logFuncL = lens appLogFunc (\x logFunc -> x{ appLogFunc = logFunc })
+
 main :: IO ()
 main =
   do
@@ -106,82 +121,59 @@ main =
         glTFScenes gltf !? scIx
 
     let ani = glTFAnimations gltf !? 0
-    {-
-    let accs = glTFAccessors gltf
-    forM_ accs $ \acc ->
-      do
-        case J.fromJSON $ accessorType acc
-          of
-            J.Success s -> BS.putStr $ encodeUtf8 s
-            J.Error err -> BS.putStr $ "Error:" <> fromString err
-        BS.putStr ","
-        case J.fromJSON $ accessorComponentType acc
-            of
-              J.Success i -> BS.putStr $ dispEType i
-              J.Error err -> BS.putStr $ "Error:" <> fromString err
-        BS.putStr "\n"
-    -}
 
     let bbox = calcBBox gltf scene
 
     logOpt <- logOptionsHandle stderr False
-    withHolz $ withLogFunc logOpt $ \logFunc -> runRIO logFunc $
+    withHolz $ withLogFunc logOpt $ \logFunc ->
       do
-        w <- liftIO $ openWindow Windowed (Box (V2 0 0) canvasSize)
-        logInfo $ displayShow bbox
-
+        w <- openWindow Windowed (Box (V2 0 0) canvasSize)
         shader <- makeVRMShader
 
-        (vbs, _) <- runMRShaderT shader $ mapToGL gltf bin scene
-        aniState <- mapM (initAniState gltf bin) ani
-        vTr <- newIORef (initTrans bbox)
-        vT <-
+        let app = App logFunc w shader
+        runRIO app $
           do
-            t0 <- liftIO $ fromMaybe 0 <$> GLFW.getTime
-            newIORef t0
-
-        vMouseGrab <- newIORef Nothing
-
-        liftIO $ runReaderT (linkMouseButton (onMouseEvent vMouseGrab vTr w)) w
-
-        forever $ runReaderT `flip` w $ withFrame w $ runMRShaderT shader $
-          do
-            windowShouldClose >>= bool (return ()) exitSuccess
-
-            delta <-
+            (vbs, _) <- mapToGL gltf bin scene
+            aniState <- mapM (initAniState gltf bin) ani
+            vTr <- newIORef (initTrans bbox)
+            vT <-
               do
-                t <- readIORef vT
-                t' <- liftIO $ fromMaybe 0 <$> GLFW.getTime
-                writeIORef vT t'
-                return $ realToFrac (t' - t)
+                t0 <- liftIO $ fromMaybe 0 <$> GLFW.getTime
+                newIORef t0
 
-            onMouseUpdate vMouseGrab ((canvasSize ^. _x) / 2) vTr
-            tr <- readIORef vTr
-            -- writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
+            vMouseGrab <- newIORef Nothing
+            linkMouseButton (onMouseEvent vMouseGrab vTr w)
 
-            initView
-            liftIO $ with tr $ \p ->
-                glUniformMatrix4fv (locationModel shader) 1 1 (castPtr p)
-            liftIO $ with (V3 0.577 0.577 0.577 :: V3 Float) $ \p ->
-                glUniform3fv (locationPlaneDir shader) 1 (castPtr p)
-            clearColor grayColor
-            drawScene gltf vbs scene aniState delta
+            forever $ withFrame w $
+              do
+                windowShouldClose >>= bool (return ()) exitSuccess
 
-initView :: MonadHolz m => MRShaderT m ()
+                delta <-
+                  do
+                    t <- readIORef vT
+                    t' <- liftIO $ fromMaybe 0 <$> GLFW.getTime
+                    writeIORef vT t'
+                    return $ realToFrac (t' - t)
+
+                onMouseUpdate vMouseGrab ((canvasSize ^. _x) / 2) vTr
+                tr <- readIORef vTr
+                -- writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
+
+                initView
+                setUniform model tr
+                setUniform planeDir (V3 0.577 0.577 0.577)
+                clearColor grayColor
+                drawScene gltf vbs scene aniState delta
+
+initView :: (MonadHolz r m, HasWindow r, HasMRShader r) => m ()
 initView =
   do
     box@(Box (V2 x0 y0) (V2 x1 y1)) <- getBoundingBox
     setViewport box
     let w = x1 - x0
         h = y1 - y0
-        proj = ortho (-w/2) (w/2) (-h/2) (h/2) (-w/2) (w/2)
-        sight = V3 0 0 (-1) :: V3 Float
-    locProjection <- askMRShader locationProjection
-    liftIO $ with proj $ \p ->
-        glUniformMatrix4fv locProjection 1 1 (castPtr p)
-    locSight <- askMRShader locationSight
-    liftIO $ with sight $ \p ->
-        glUniform3fv locSight 1 (castPtr p)
+    setUniform projection $ ortho (-w/2) (w/2) (-h/2) (h/2) (-w/2) (w/2)
+    setUniform sight (V3 0 0 (-1))
 
 
 initTrans :: Box V3 Float -> M44 Float

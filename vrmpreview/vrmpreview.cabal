@@ -26,6 +26,7 @@ executable vrmpreview
   -- other-extensions:
   ghc-options:         -Wall
   build-depends:       base >=4.11 && <5
+                     , ghc-prim
                      , aeson
                      , gltf
                      , rio
