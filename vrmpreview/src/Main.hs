@@ -15,6 +15,7 @@ module Main where
 
 import RIO hiding (first, second)
 import RIO.Vector ((!?))
+import qualified RIO.Vector as V
 import qualified RIO.ByteString as BS
 import Control.Monad.Trans.Maybe
 import System.Environment (getArgs)
@@ -26,7 +27,7 @@ import qualified Graphics.Holz.Input as HIn
 import qualified Graphics.UI.GLFW as GLFW
 import Linear hiding (trace)
 import qualified Data.HashMap.Strict as HM
--- import qualified Data.Aeson as J
+import qualified Data.Aeson as J
 
 import Graphics.GlTF.Type
 import Graphics.GlTF.Shader
@@ -124,7 +125,13 @@ main =
 
     let bbox = calcBBox gltf scene
 
+    let tgtIx = 
+            listToMaybe . catMaybes . V.toList $
+                V.imap (\i x -> guard (nodeName x == Just (J.String "RightArm")) >> Just i) $
+                    glTFNodes gltf
+
     logOpt <- logOptionsHandle stderr False
+
     withHolz $ withLogFunc logOpt $ \logFunc ->
       do
         w <- openWindow Windowed (Box (V2 0 0) canvasSize)
@@ -133,6 +140,7 @@ main =
         let app = App logFunc w shader
         runRIO app $
           do
+            logInfo $ "RightArm >> " <> displayShow tgtIx 
             (vbs, _) <- mapToGL gltf bin scene
             aniState <- mapM (initAniState gltf bin) ani
             vTr <- newIORef (initTrans bbox)
@@ -160,7 +168,7 @@ main =
                 -- writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
 
                 initView
-                setUniform model tr
+                setUniform model identity
                 setUniform planeDir (V3 0.577 0.577 0.577)
                 clearColor grayColor
                 drawScene gltf vbs scene aniState delta
