@@ -51,10 +51,11 @@ do
         stgDef = CONJCT.defaultSchemaSetting (T.pack scRoot)
         onM = onMember_custom : CONJCT.onMember stgDef
         onT = onType_custom : CONJCT.onType stgDef
-        stg = stgDef {
-            CONJCT.onMember = onM,
-            CONJCT.onType = onT
-          }
+        stg = CONJCT.SimpleSchemaSetting $
+            stgDef {
+                CONJCT.onMember = onM,
+                CONJCT.onType = onT
+              }
     CONJCT.fromSchema
         stg
         "glTF.schema.json" 
