@@ -1,7 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -17,6 +15,7 @@ import qualified Data.Aeson as J
 import Data.Int
 import Data.Word
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad (guard)
 import System.Environment (getEnv)
 import Language.Haskell.TH
 import TH.RelativePaths
@@ -47,7 +46,7 @@ do
             | otherwise = Nothing
         onType_custom _ o =
           do
-            CONJCT.checkType o "number"
+            guard $ o `CONJCT.isType` "number"
             return $ return $ ConT ''Float
 
         stgDef = CONJCT.defaultSchemaSetting (T.pack scRoot)
@@ -58,6 +57,5 @@ do
                 CONJCT.onMember = onM,
                 CONJCT.onType = onT
               }
-    CONJCT.fromSchema
-        stg
-        "glTF.schema.json" 
+
+    CONJCT.fromSchema stg "glTF.schema.json" 
