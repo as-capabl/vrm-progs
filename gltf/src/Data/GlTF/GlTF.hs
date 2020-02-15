@@ -4,6 +4,8 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module
     Data.GlTF.GlTF
@@ -23,23 +25,23 @@ import Data.GlTF.Prim
 
 do
     scRoot <- pathRelativeToCabalPackage "schema"
-    let onMember_custom _ fn mn _ _
-            | fn == "sampler.schema.json" =
+    let onMember_custom _ (CONJCT.getModuleSummary -> CONJCT.ModuleSummary{..}) mn _
+            | msModuleName == "sampler.schema.json" =
                 if
                     | mn == "magFilter" || mn == "minFilter" || mn == "wrapS" || mn == "wrapT" -> Just $
                       do
-                        nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault fn mn
+                        nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault msModuleName mn
                         return $ CONJCT.mkFieldInfo nMem (ConT ''Maybe `AppT` ConT ''Int32) mn '(J..:)
                     | otherwise -> Nothing
-            | fn == "accessor.schema.json" =
+            | msModuleName == "accessor.schema.json" =
                 if
                     | mn == "componentType" -> Just $ 
                       do
-                        nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault fn mn
+                        nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault msModuleName mn
                         return $ CONJCT.mkFieldInfo nMem (ConT ''Word32) mn '(J..:)
                     | mn == "type" -> Just $
                       do
-                        nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault fn mn
+                        nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault msModuleName mn
                         return $ CONJCT.mkFieldInfo nMem (ConT ''AccType) mn '(J..:)
                     | otherwise -> Nothing
             | otherwise = Nothing
