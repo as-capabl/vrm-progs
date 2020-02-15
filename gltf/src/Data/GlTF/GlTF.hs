@@ -4,6 +4,7 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module
     Data.GlTF.GlTF
@@ -24,27 +25,27 @@ import Data.GlTF.Prim
 
 do
     scRoot <- pathRelativeToCabalPackage "schema"
-    let onMember_sampler _ (CONJCT.getModuleSummary -> CONJCT.ModuleSummary{..}) mn _ =
+    let onMember_sampler arg ms@(CONJCT.getModuleSummary -> CONJCT.ModuleSummary{..}) mn _ =
           do
-            guard $ msModuleName == "sampler.schema.json"
+            guard $ msSchemaFile == "sampler.schema.json"
             if
                 | mn == "magFilter" || mn == "minFilter" || mn == "wrapS" || mn == "wrapT" -> Just $
                   do
-                    nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault msModuleName mn
+                    nMem <- CONJCT.memberName (CONJCT.getSchemaSetting arg) arg ms mn
                     return $ CONJCT.mkFieldInfo nMem (ConT ''Maybe `AppT` ConT ''Int32) mn '(J..:)
                 | otherwise -> Nothing
 
-        onMember_accessor _ (CONJCT.getModuleSummary -> CONJCT.ModuleSummary{..}) mn _ =
+        onMember_accessor arg ms@(CONJCT.getModuleSummary -> CONJCT.ModuleSummary{..}) mn _ =
           do
-            guard $ msModuleName == "accessor.schema.json"
+            guard $ msSchemaFile == "accessor.schema.json"
             if
                 | mn == "componentType" -> Just $ 
                   do
-                    nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault msModuleName mn
+                    nMem <- CONJCT.memberName (CONJCT.getSchemaSetting arg) arg ms mn
                     return $ CONJCT.mkFieldInfo nMem (ConT ''Word32) mn '(J..:)
                 | mn == "type" -> Just $
                   do
-                    nMem <- maybe (fail "memberName") return $ CONJCT.memberNameDefault msModuleName mn
+                    nMem <- CONJCT.callSchemaSetting CONJCT.memberName arg ms mn
                     return $ CONJCT.mkFieldInfo nMem (ConT ''AccType) mn '(J..:)
                 | otherwise -> Nothing
     
