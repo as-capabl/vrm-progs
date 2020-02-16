@@ -168,7 +168,7 @@ main =
                 -- writeIORef vTr $! rotZX (delta * pi * 0.5) !*! tr
 
                 initView
-                setUniform model identity
+                setUniform model tr
                 setUniform planeDir (V3 0.577 0.577 0.577)
                 clearColor grayColor
                 drawScene gltf vbs scene aniState delta

@@ -11,6 +11,7 @@ module
 where
 
 import qualified CONJCT
+import qualified CONJCT.Preset.V1 as V1
 import qualified Data.Text as T
 import qualified Data.Aeson as J
 import Data.Int
@@ -54,7 +55,7 @@ do
             guard $ o `CONJCT.isType` "number"
             return $ return $ ConT ''Float
 
-        stgDef = CONJCT.defaultSchemaSetting (T.pack scRoot)
+        stgDef = V1.defaultSchemaSetting (T.pack scRoot)
         onM = onMember_sampler : onMember_accessor : CONJCT.onMember stgDef
         onT = onType_float : CONJCT.onType stgDef
         stg = CONJCT.SimpleSchemaSetting $
@@ -63,4 +64,4 @@ do
                 CONJCT.onType = onT
               }
 
-    CONJCT.fromSchema stg "glTF.schema.json" 
+    CONJCT.fromSchema stg ["glTF.schema.json"]
