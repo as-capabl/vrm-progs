@@ -1,1 +1,3 @@
 packages:   gltf, gltfdump, vrmpreview, ext/conjct, ext/holz
+
+constraints: any.freetype2 <0.2

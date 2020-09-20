@@ -24,7 +24,9 @@ die e = logError e >> exitFailure
 main :: IO ()
 main = runSimpleApp $
   do
-    fname : _ <- liftIO getArgs
+    fname <- liftIO getArgs >>= \case
+        fname : _ -> return fname
+        _ -> exitFailure
     (gltf, bin) <- liftIO (readGlbRaw fname) >>= \case
         Left err -> die (display err)
         Right x -> return x
